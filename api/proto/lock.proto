@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package clavis.v1;
+
+option go_package = "github.com/Mfon-19/clavis";
+
+
+// LockService is the data plane. Application workers use it to create a lease,
+// keep that lease alive, acquire/release named locks, and discover cluster
+// status. Mutating RPCs must be served by the current Raft leader.
+service LockService {
+  rpc CreateLease(CreateLeaseRequest) returns (CreateLeaseResponse);
+  rpc RenewLease(RenewLeaseRequest) returns (RenewLeaseResponse);
+  rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
+  rpc AcquireLock(AcquireLockRequest) returns (AcquireLockResponse);
+  rpc ReleaseLock(ReleaseLockRequest) returns (ReleaseLockResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+
+// AdminService is the control plane. It is split from LockService so operators
+// can apply stronger authentication/authorization to membership changes.
+service AdminService {
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc JoinNode(JoinNodeRequest) returns (JoinNodeResponse);
+  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
+}
+
+message CreateLeaseRequest {
+  // owner_id is used only when no authenticated workload identity is present.
+  // With mTLS, the server derives the effective owner from the client cert.
+  string owner_id = 1;
+  // ttl_seconds controls how long the lease remains valid without renewal.
+  int64 ttl_seconds = 2;
+}
+
+message CreateLeaseResponse {
+  // lease_id is the server-assigned session identifier used by later RPCs.
+  uint64 lease_id = 1;
+  int64 ttl_seconds = 2;
+}
+
+message RenewLeaseRequest {
+  uint64 lease_id = 1;
+}
+
+message RenewLeaseResponse {
+  int64 ttl_seconds = 1;
+}
+
+message HeartbeatRequest {
+  uint64 lease_id = 1;
+}
+message HeartbeatResponse {
+  uint64 lease_id = 1;
+  int64 ttl_seconds = 2;
+}
+
+message AcquireLockRequest {
+  string lock_name = 1;
+  // owner_id is overridden by mTLS-derived workload identity when available.
+  string owner_id = 2;
+  uint64 lease_id = 3;
+}
+
+message AcquireLockResponse {
+  // fencing_token is globally monotonic. Callers should include it in
+  // downstream writes so stale workers can be rejected.
+  uint64 fencing_token = 1;
+  int64 lease_ttl_seconds = 2;
+}
+
+message ReleaseLockRequest {
+  string lock_name = 1;
+  uint64 lease_id = 2;
+}
+
+message ReleaseLockResponse {
+  bool released = 1;
+}
+
+message GetStatusRequest {
+  // No parameters needed
+}
+
+message GetStatusResponse {
+  string node_id = 1;           // This node's ID
+  bool is_leader = 2;           // Is this node the leader?
+  string leader_address = 3;    // Current leader address
+  int32 cluster_size = 4;       // Number of nodes in cluster
+  string state = 5;             // Raft state: "leader", "follower", "candidate"
+  Stats stats = 6;              // FSM statistics
+  string grpc_address = 7;      // This node's gRPC address
+  repeated ClusterMember members = 9; // Replicated node metadata for discovery
+  string leader_grpc_address = 10;    // Client-facing gRPC address of the leader
+}
+
+// LeaderHint is attached to "not leader" gRPC errors as structured status
+// details so clients do not need to parse free-form error messages.
+message LeaderHint {
+  string grpc_address = 1;
+  string raft_address = 2;
+}
+
+message Stats {
+  int32 leases = 1;             // Number of active leases
+  int32 locks = 2;              // Number of active locks
+  uint64 fencing_counter = 3;   // Current fencing counter value
+}
+
+message ClusterMember {
+  // node_id is the Raft ServerID.
+  string node_id = 1;
+  // raft_address is used only for peer-to-peer Raft traffic.
+  string raft_address = 2;
+  // grpc_address is used by clients/admin tools for RPC traffic.
+  string grpc_address = 3;
+}
+
+message JoinNodeRequest {
+  string node_id = 1;
+  string raft_address = 2;
+  string grpc_address = 3;
+}
+
+message JoinNodeResponse {
+  bool joined = 1;
+  string leader_grpc_address = 2;
+}
+
+message RemoveNodeRequest {
+  string node_id = 1;
+}
+
+message RemoveNodeResponse {
+  bool removed = 1;
+}

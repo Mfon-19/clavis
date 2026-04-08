@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Mfon-19/clavis/internal/domain"
+	"github.com/Mfon-19/clavis/internal/raftlog"
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
 	"io"
 )
 
@@ -22,9 +24,19 @@ func NewRaftFSM() *RaftFSM {
 	}
 }
 
+// Apply deserializes a committed Raft log entry and delegates to the pure FSM
 func (rf *RaftFSM) Apply(log *raft.Log) any {
-	// TODO: implement
-	return 0
+	var wrapper raftlog.CommandWrapper
+	if err := proto.Unmarshal(log.Data, &wrapper); err != nil {
+		return err
+	}
+
+	result, err := rf.fsm.Apply(&wrapper)
+	if err != nil {
+		return err
+	}
+
+	return result
 }
 
 func (rf *RaftFSM) Snapshot() (raft.FSMSnapshot, error) {

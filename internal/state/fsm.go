@@ -1,7 +1,9 @@
 package state
 
 import (
+	"fmt"
 	"github.com/Mfon-19/clavis/internal/domain"
+	"github.com/Mfon-19/clavis/internal/raftlog"
 	"sync"
 
 	tm "time"
@@ -36,6 +38,258 @@ func NewFSM() *FSM {
 		fencingCounter: 0,
 		nextLeaseID:    1,
 	}
+}
+
+// Apply dispatches a command to the appropriate handler and returns a typed
+// response (e.g. [CreateLeaseResponse], [AcquireLockResponse]) or an error.
+// All business invariants are enforced here.
+func (f *FSM) Apply(cmd *raftlog.CommandWrapper) (any, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	switch cmd.GetType() {
+	case raftlog.CommandType_COMMAND_TYPE_CREATE_LEASE:
+		return f.applyCreateLease(cmd.GetCreateLease())
+	case raftlog.CommandType_COMMAND_TYPE_RENEW_LEASE:
+		return f.applyRenewLease(cmd.GetRenewLease())
+	case raftlog.CommandType_COMMAND_TYPE_ACQUIRE_LOCK:
+		return f.applyAcquireLock(cmd.GetAcquireLock())
+	case raftlog.CommandType_COMMAND_TYPE_RELEASE_LOCK:
+		return f.applyReleaseLock(cmd.GetReleaseLock())
+	case raftlog.CommandType_COMMAND_TYPE_EXPIRE_LEASE:
+		return f.applyExpireLease(cmd.GetExpireLease())
+	case raftlog.CommandType_COMMAND_TYPE_REGISTER_NODE:
+		return f.applyRegisterNode(cmd.GetRegisterNode())
+	case raftlog.CommandType_COMMAND_TYPE_DEREGISTER_NODE:
+		return f.applyDeregisterNode(cmd.GetDeregisterNode())
+	default:
+		return nil, fmt.Errorf("%w: %s", domain.ErrUnknownCommand, cmd.GetType().String())
+	}
+}
+
+// returned when a lease is created
+type CreateLeaseResponse struct {
+	LeaseID   uint64
+	ExpiresAt tm.Time
+}
+
+func (f *FSM) applyCreateLease(cmd *raftlog.CreateLeaseCommand) (any, error) {
+	ttl := tm.Duration(cmd.GetTtlNanos())
+	if ttl <= 0 {
+		return nil, domain.ErrInvalidLeaseTTL
+	}
+
+	createdAt, err := commandTime(cmd.GetCreateAtUnixNano())
+	if err != nil {
+		return nil, err
+	}
+
+	leaseID := f.nextLeaseID
+	f.nextLeaseID++
+
+	// Expiry is computed from the timestamp carried in the Raft log entry, not
+	// from each node's local clock at apply time. That keeps replay deterministic
+	// across followers and restarts.
+	expiresAt := createdAt.Add(ttl)
+
+	lease := &domain.Lease{
+		LeaseID:           leaseID,
+		OwnerID:           cmd.GetOwnerId(),
+		ExpiresAtUnixNano: expiresAt.UnixNano(),
+		TTL:               ttl,
+	}
+
+	f.leases[leaseID] = lease
+
+	return CreateLeaseResponse{
+		LeaseID:   leaseID,
+		ExpiresAt: expiresAt,
+	}, nil
+}
+
+// returned when a lease is renewed
+type RenewLeaseResponse struct {
+	ExpiresAt tm.Time
+	TTL       tm.Duration
+}
+
+func (f *FSM) applyRenewLease(cmd *raftlog.RenewLeaseCommand) (any, error) {
+	renewedAt, err := commandTime(cmd.GetRenewedAtUnixNano())
+	if err != nil {
+		return nil, err
+	}
+
+	lease, exists := f.leases[cmd.GetLeaseId()]
+	if !exists {
+		return nil, domain.ErrLeaseNotFound
+	}
+
+	// If the lease was already expired at the renewal proposal time, this renewal
+	// is rejected. The cluster layer handles pending renewals so a timely renewal
+	// is not incorrectly beaten by the expiry loop
+	if lease.IsExpired(renewedAt) {
+		return nil, domain.ErrLeaseExpired
+	}
+
+	lease.ExpiresAtUnixNano = renewedAt.Add(lease.TTL).UnixNano()
+
+	return RenewLeaseResponse{
+		ExpiresAt: lease.ExpiresAt(),
+		TTL:       lease.TTL,
+	}, nil
+}
+
+// AcquireLockResponse is returned when a lock is successfully acquired.
+// FencingToken is globally monotonic and should be passed to downstream
+// systems to prevent stale writes from expired lock holders
+type AcquireLockResponse struct {
+	FencingToken uint64
+	LeaseTTL     tm.Duration
+}
+
+func (f *FSM) applyAcquireLock(cmd *raftlog.AcquireLockCommand) (any, error) {
+	acquredAt, err := commandTime(cmd.GetAcquiredAtUnixNano())
+	if err != nil {
+		return nil, err
+	}
+
+	lease, exists := f.leases[cmd.GetLeaseId()]
+	if !exists {
+		return nil, domain.ErrLeaseNotFound
+	}
+
+	if lease.IsExpired(acquredAt) {
+		return nil, domain.ErrLeaseExpired
+	}
+
+	if lease.OwnerID != cmd.GetOwnerId() {
+		return nil, domain.ErrNotLockOwner
+	}
+
+	if existingLock, held := f.locks[cmd.GetLockName()]; held {
+		// If held by the same lease, allow re-acquisition (idempotent)
+		if existingLock.LeaseID == cmd.GetLeaseId() {
+			return AcquireLockResponse{
+				FencingToken: existingLock.FencingToken,
+			}, nil
+		}
+		// Held by a different lease, cannot acquire
+		return nil, domain.ErrLockAlreadyHeld
+	}
+
+	// This is the core stale-writer defense. Every new acquisition increments a
+	// cluster-wide fencing counter. Downstream systems should reject writes with
+	// tokens lower than the last token they accepted
+	f.fencingCounter++
+	fencingToken := f.fencingCounter
+
+	lock := &domain.Lock{
+		Name:         cmd.GetLockName(),
+		OwnerID:      cmd.GetOwnerId(),
+		FencingToken: fencingToken,
+		LeaseID:      cmd.GetLeaseId(),
+	}
+
+	f.locks[cmd.GetLockName()] = lock
+
+	return AcquireLockResponse{
+		FencingToken: fencingToken,
+		LeaseTTL:     lease.TTL,
+	}, nil
+}
+
+type ReleaseLockResponse struct {
+	Released bool
+}
+
+func (f *FSM) applyReleaseLock(cmd *raftlog.ReleaseLockCommand) (any, error) {
+	lock, held := f.locks[cmd.GetLockName()]
+	if !held {
+		return nil, domain.ErrLockNotFound
+	}
+
+	if lock.LeaseID != cmd.GetLeaseId() {
+		return nil, domain.ErrNotLockOwner
+	}
+
+	delete(f.locks, cmd.GetLockName())
+
+	return ReleaseLockResponse{
+		Released: true,
+	}, nil
+}
+
+type ExpireLeaseResponse struct {
+	LocksReleased int
+}
+
+func (f *FSM) applyExpireLease(cmd *raftlog.ExpireLeaseCommand) (any, error) {
+	expiredAt, err := commandTime(cmd.GetExpiredAtUnixNano())
+	if err != nil {
+		return nil, err
+	}
+
+	lease, exists := f.leases[cmd.GetLeaseId()]
+	if !exists {
+		return ExpireLeaseResponse{}, nil
+	}
+
+	if !lease.IsExpired(expiredAt) {
+		// A renewal may have committed before this expiry command. In that case,
+		// the expiry command is stale and must not delete the renewed lease.
+		return ExpireLeaseResponse{}, nil
+	}
+
+	// Lease expiry cascades to lock release so crashed clients do not hold locks
+	// forever. This is safe because downstream writes are protected by fencing
+	// tokens even if a paused client resumes later.
+	locksReleased := 0
+	for lockName, lock := range f.locks {
+		if lock.LeaseID == lease.LeaseID {
+			delete(f.locks, lockName)
+			locksReleased++
+		}
+	}
+
+	delete(f.leases, lease.LeaseID)
+
+	return ExpireLeaseResponse{
+		LocksReleased: locksReleased,
+	}, nil
+}
+
+type RegisterNodeResponse struct {
+	Registered bool
+}
+
+func (f *FSM) applyRegisterNode(cmd *raftlog.RegisterNodeCommand) (any, error) {
+	if cmd.GetNodeId() == "" || cmd.GetRaftAddress() == "" || cmd.GetGrpcAddress() == "" {
+		return nil, domain.ErrInvalidClusterNode
+	}
+
+	member := &domain.ClusterMember{
+		NodeID:      cmd.GetNodeId(),
+		RaftAddress: cmd.GetRaftAddress(),
+		GRPCAddress: cmd.GetGrpcAddress(),
+	}
+
+	f.members[cmd.GetNodeId()] = member
+
+	return RegisterNodeResponse{Registered: true}, nil
+}
+
+type DeregisterNodeResponse struct {
+	Removed bool
+}
+
+func (f *FSM) applyDeregisterNode(cmd *raftlog.DeregisterNodeCommand) (any, error) {
+	if _, exists := f.members[cmd.GetNodeId()]; !exists {
+		return DeregisterNodeResponse{Removed: false}, nil
+	}
+
+	delete(f.members, cmd.GetNodeId())
+
+	return DeregisterNodeResponse{Removed: true}, nil
 }
 
 func (f *FSM) GetLock(lockName string) (*domain.Lock, bool) {
@@ -123,4 +377,11 @@ func (f *FSM) GetExpiredLeases(now tm.Time) []uint64 {
 	}
 
 	return expired
+}
+
+func commandTime(unixNano int64) (tm.Time, error) {
+	if unixNano <= 0 {
+		return tm.Time{}, fmt.Errorf("invalid command timestamp")
+	}
+	return tm.Unix(0, unixNano).UTC(), nil
 }

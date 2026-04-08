@@ -1,8 +1,11 @@
 package state
 
 import (
+	"encoding/json"
+	"fmt"
 	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/hashicorp/raft"
+	"io"
 )
 
 // RaftFSM adapts the pure [FSM] to the [raft.FSM] interface required by
@@ -56,6 +59,72 @@ func (rf *RaftFSM) Snapshot() (raft.FSMSnapshot, error) {
 	return snapshot, nil
 }
 
+// Restore replaces the FSM state from a JSON snapshot. This is called
+// when a node falls behind and needs to catch up, or when a new node
+// joins the cluster
+func (rf *RaftFSM) Restore(snapshot io.ReadCloser) error {
+	defer snapshot.Close()
+
+	var snap fsmSnapshot
+	if err := json.NewDecoder(snapshot).Decode(&snap); err != nil {
+		return err
+	}
+
+	rf.fsm.mu.Lock()
+	defer rf.fsm.mu.Unlock()
+
+	if err := validateSnapshot(&snap); err != nil {
+		return err
+	}
+
+	rf.fsm.locks = snap.Locks
+	rf.fsm.leases = snap.Leases
+	rf.fsm.members = snap.Members
+	rf.fsm.fencingCounter = snap.FencingCounter
+	rf.fsm.nextLeaseID = snap.NextLeaseID
+
+	return nil
+}
+
+func validateSnapshot(snap *fsmSnapshot) error {
+	if snap.Locks == nil {
+		return fmt.Errorf("snapshot locks missing")
+	}
+	if snap.Leases == nil {
+		return fmt.Errorf("snapshot leases missing")
+	}
+	if snap.Members == nil {
+		return fmt.Errorf("snapshot members missing")
+	}
+
+	for leaseID, lease := range snap.Leases {
+		if lease == nil {
+			return fmt.Errorf("snapshot lease %d is nil", leaseID)
+		}
+		if lease.ExpiresAtUnixNano <= 0 {
+			return fmt.Errorf("snapshot lease %d has invalid expiry", leaseID)
+		}
+		if lease.TTL <= 0 {
+			return fmt.Errorf("snapshot lease %d has invalid ttl", leaseID)
+		}
+	}
+
+	for nodeID, member := range snap.Members {
+		if member == nil {
+			return fmt.Errorf("snapshot member %q is nil", nodeID)
+		}
+		if member.NodeID == "" || member.RaftAddress == "" || member.GRPCAddress == "" {
+			return fmt.Errorf("snapshot member %q is incomplete", nodeID)
+		}
+	}
+
+	return nil
+}
+
+func (rf *RaftFSM) GetFSM() *FSM {
+	return rf.fsm
+}
+
 // fsmSnapshot is the serialized, point-in-time FSM state used by Raft snapshots
 type fsmSnapshot struct {
 	Locks          map[string]*domain.Lock          `json:"locks"`
@@ -65,12 +134,16 @@ type fsmSnapshot struct {
 	NextLeaseID    uint64                           `json:"next_lease_id"`
 }
 
-func (f fsmSnapshot) Persist(sink raft.SnapshotSink) error {
-	//TODO implement me
-	panic("implement me")
+// Persist writes the snapshot to Raft's sink. If encoding fails, the sink
+// must be canceled so Raft does not treat the partial file as valid
+func (f *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
+	if err := json.NewEncoder(sink).Encode(f); err != nil {
+		sink.Cancel() // Fail snapshot on error
+		return err
+	}
+	return sink.Close()
 }
 
-func (f fsmSnapshot) Release() {
-	//TODO implement me
-	panic("implement me")
-}
+// Release is required by raft.FSMSnapshot. The snapshot owns no external
+// resources so there is nothing to clean up
+func (f fsmSnapshot) Release() {}

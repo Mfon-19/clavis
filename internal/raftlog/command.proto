@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package raftlog;
+
+option go_package = "github.com/Mfon-19/clavis/internal/raftlog";
+
+// CommandType identifies which command payload is present in CommandWrapper.
+// These values are persisted in Raft logs; never reuse removed numbers.
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_CREATE_LEASE = 1;
+  COMMAND_TYPE_RENEW_LEASE = 2;
+  COMMAND_TYPE_ACQUIRE_LOCK = 3;
+  COMMAND_TYPE_RELEASE_LOCK = 4;
+  COMMAND_TYPE_EXPIRE_LEASE = 5;
+  COMMAND_TYPE_REGISTER_NODE = 6;
+  COMMAND_TYPE_DEREGISTER_NODE = 7;
+}
+
+// CreateLeaseCommand creates a new lease. The service supplies created_at so
+// every node computes the same expiry time while replaying the Raft log
+message CreateLeaseCommand {
+  string owner_id = 1;
+  int64 ttl_nanos = 2;
+  int64 create_at_unix_nano = 3;
+}
+
+// RenewLeaseCommand renews an existing lease relative to the proposal time.
+message RenewLeaseCommand {
+  uint64 lease_id = 1;
+  int64 renewed_at_unix_nano = 2;
+}
+
+// AcquireLockCommand acquires a lock with fencing. The timestamp lets the FSM
+// reject acquisitions whose lease had already expired at proposal time.
+message AcquireLockCommand {
+  string lock_name = 1;
+  string owner_id = 2;
+  uint64 lease_id = 3;
+  int64 acquired_at_unix_nano = 4;
+}
+
+// ReleaseLockCommand releases a lock held by a lease.
+message ReleaseLockCommand {
+  string lock_name = 1;
+  uint64 lease_id = 2;
+}
+
+// ExpireLeaseCommand expires a lease and releases all its locks. If a renewal
+// committed first, the FSM no-ops this command instead of deleting live state.
+message ExpireLeaseCommand {
+  uint64 lease_id = 1;
+  int64 expired_at_unix_nano = 2;
+}
+
+// RegisterNodeCommand stores client-facing membership metadata in the FSM.
+// Raft membership itself is still changed through HashiCorp Raft APIs.
+message RegisterNodeCommand {
+  string node_id = 1;
+  string raft_address = 2;
+  string grpc_address = 3;
+  reserved 4;
+}
+
+// DeregisterNodeCommand removes replicated membership metadata for a node.
+message DeregisterNodeCommand {
+  string node_id = 1;
+}
+
+// CommandWrapper is the exact message serialized into each Raft log entry.
+// The explicit type is redundant with the oneof, but it keeps tracing and
+// switch statements simple and stable across generated-code changes.
+message CommandWrapper {
+  CommandType type = 1;
+
+  // Only one of these will be set based on type
+  oneof payload {
+    CreateLeaseCommand create_lease = 2;
+    RenewLeaseCommand renew_lease = 3;
+    AcquireLockCommand acquire_lock = 4;
+    ReleaseLockCommand release_lock = 5;
+    ExpireLeaseCommand expire_lease = 6;
+    RegisterNodeCommand register_node = 7;
+    DeregisterNodeCommand deregister_node = 8;
+  }
+}

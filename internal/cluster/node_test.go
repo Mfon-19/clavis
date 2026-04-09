@@ -2,10 +2,10 @@ package cluster
 
 import (
 	"fmt"
+	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/Mfon-19/clavis/internal/raftlog"
 	"github.com/Mfon-19/clavis/internal/state"
 	"github.com/google/uuid"
-	"github.com/hashicorp/raft"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"net"
@@ -185,13 +185,12 @@ func TestMultiNodeCluster(t *testing.T) {
 		require.NoError(t, err, fmt.Sprintf("failed to create node %d", i))
 		defer nodes[i].Shutdown()
 
-		future := nodes[0].raft.AddVoter(
-			raft.ServerID(cfgs[i].NodeID.String()),
-			raft.ServerAddress(cfgs[i].BindAddr),
-			0, 0,
-		)
-		require.NoError(t, future.Error(), fmt.Sprintf("failed to add node %d as voter", i))
-
+		err = nodes[0].AddClusterMember(domain.ClusterMember{
+			NodeID:      cfgs[i].NodeID.String(),
+			RaftAddress: cfgs[i].BindAddr,
+			GRPCAddress: cfgs[i].BindAddr,
+		})
+		require.NoError(t, err, fmt.Sprintf("failed to add node %d via AddClusterMember", i))
 	}
 
 	var leader *Node
@@ -207,6 +206,14 @@ func TestMultiNodeCluster(t *testing.T) {
 		return leaderCnt == 1
 	}, 5*time.Second, 100*time.Millisecond, "there should be exactly one leader")
 	require.NotNil(t, leader, "leader node should not be nil")
+
+	// Membership metadata should also be replicated
+	for i, node := range nodes {
+		i, node := i, node
+		require.Eventually(t, func() bool {
+			return len(node.Members()) == 3 && node.GetClusterSize() == 3
+		}, 5*time.Second, 100*time.Millisecond, fmt.Sprintf("node %d should observe 3 cluster members", i))
+	}
 
 	// Apply command via leader
 	createResult, err := leader.Apply(raftlog.NewCreateLeaseCmd("client-1", 10*time.Second, time.Now().UTC()))

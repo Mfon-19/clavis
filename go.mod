@@ -3,6 +3,7 @@ module github.com/Mfon-19/clavis
 go 1.24.4
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
 	github.com/stretchr/testify v1.8.4

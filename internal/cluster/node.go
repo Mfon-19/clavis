@@ -6,6 +6,7 @@ import (
 	"github.com/Mfon-19/clavis/internal/state"
 	"github.com/google/uuid"
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
 	"net"
 	"os"
 	"sync"
@@ -141,8 +142,34 @@ func NewNode(cfg *Config) (*Node, error) {
 	return node, nil
 }
 
+// Apply serializes a command to protobuf and submits it to Raft.
+//
+// This is the main safety boundary for all mutations. Callers build a
+// raftlog.CommandWrapper, Apply replicates it to a quorum, and only then does
+// the Raft library call state.RaftFSM.Apply on each node. The returned value is
+// the leader's FSM response for that committed command
 func (n *Node) Apply(cmd *raftlog.CommandWrapper) (any, error) {
+	data, err := proto.Marshal(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshap proto: %w", err)
+	}
 
+	// Replicate to the cluster through Raft. The timeout bounds how long the
+	// leader waits for quorum commit
+	future := n.raft.Apply(data, 5*time.Second)
+	if err := future.Error(); err != nil {
+		return nil, fmt.Errorf("failed to apply command: %w", err)
+	}
+
+	response := future.Response()
+
+	// The FSM returns domain errors as the Raft response. Convert those back
+	// into ordinary Go errors so the service and transport layers can map them.
+	if err, ok := response.(error); ok {
+		return nil, err
+	}
+
+	return response, nil
 }
 
 func (n *Node) IsLeader() bool {
@@ -153,4 +180,77 @@ func (n *Node) IsLeader() bool {
 func (n *Node) GetLeaderID() string {
 	_, leaderID := n.raft.LeaderWithID()
 	return string(leaderID)
+}
+
+// GetNodeID returns this node's stable Raft node ID.
+func (n *Node) GetNodeID() uuid.UUID {
+	return n.cfg.NodeID
+}
+
+// GetState returns the current Raft state: leader, follower, candidate, etc.
+func (n *Node) GetState() raft.RaftState {
+	return n.raft.State()
+}
+
+// GetClusterSize returns the current number of Raft servers in the config.
+func (n *Node) GetClusterSize() int {
+	return len(n.raft.GetConfiguration().Configuration().Servers)
+}
+
+// GetLeader returns the leader's Raft peer address. Clients should usually use
+// GetLeaderGRPCAddress instead because Raft addresses are not client-facing.
+func (n *Node) GetLeader() string {
+	leaderAddr, _ := n.raft.LeaderWithID()
+	return string(leaderAddr)
+}
+
+func (n *Node) GetFSM() *state.FSM {
+	return n.fsm
+}
+
+func (n *Node) LockState(lockName string) (bool, uint64) {
+	return n.fsm.LockState(lockName)
+}
+
+// WaitForLeader blocks until any Raft leader is known or timeout elapses.
+func (n *Node) WaitForLeader(timeout time.Duration) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	timeoutCh := time.After(timeout)
+
+	for {
+		select {
+		case <-timeoutCh:
+			return fmt.Errorf("no leader elected within timeout")
+		case <-ticker.C:
+			if n.GetLeader() != "" {
+				return nil
+			}
+		}
+	}
+}
+
+// Stats returns point-in-time FSM counters from this node's local state.
+func (n *Node) Stats() state.Stats {
+	return n.fsm.Stats()
+}
+
+// Shutdown stops the background loops, shuts down Raft, closes the transport,
+// and closes persistent storage. It is safe to call multiple times.
+func (n *Node) Shutdown() error {
+	var err error
+	n.shutdownOnce.Do(func() {
+		close(n.stopCh)
+
+		future := n.raft.Shutdown()
+		err = future.Error()
+		if err != nil {
+			err = fmt.Errorf("failed to shutdown raft: %w", err)
+			return
+		}
+
+		n.transport.Close()
+		n.storage.Close()
+	})
+	return err
 }

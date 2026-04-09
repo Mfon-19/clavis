@@ -48,7 +48,7 @@ func (rf *RaftFSM) Snapshot() (raft.FSMSnapshot, error) {
 		Leases:         make(map[uint64]*domain.Lease),
 		Members:        make(map[string]*domain.ClusterMember),
 		FencingCounter: rf.fsm.fencingCounter,
-		NextLeaseID:    0,
+		NextLeaseID:    rf.fsm.nextLeaseID,
 	}
 
 	// Deep-copy maps before returning the snapshot object. Raft may persist the

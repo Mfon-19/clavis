@@ -49,7 +49,6 @@ func TestRaftFSMSnapshot(t *testing.T) {
 
 	// Create some state
 	raftFSM.fsm.Apply(raftlog.NewCreateLeaseCmd("client-1", 10*time.Second, time.Now().UTC()))
-
 	raftFSM.fsm.Apply(raftlog.NewCreateLeaseCmd("client-2", 10*time.Second, time.Now().UTC()))
 
 	// Create snapshot

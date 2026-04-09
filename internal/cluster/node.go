@@ -148,3 +148,9 @@ func (n *Node) Apply(cmd *raftlog.CommandWrapper) (any, error) {
 func (n *Node) IsLeader() bool {
 	return n.raft.State() == raft.Leader
 }
+
+// GetLeaderID returns the node ID of the current Raft leader, or empty if unknown.
+func (n *Node) GetLeaderID() string {
+	_, leaderID := n.raft.LeaderWithID()
+	return string(leaderID)
+}

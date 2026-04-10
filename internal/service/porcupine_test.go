@@ -368,7 +368,7 @@ func assertLinearizable(t *testing.T, history []porcupine.Operation) {
 	t.Helper()
 
 	result, info := porcupine.CheckOperationsVerbose(lockLinearizabilityModel(), history, 0)
-	visualizationPath := filepath.Join("/Users/mfonudoh/Desktop/Programs/clavis/tmp", t.Name()+".html")
+	visualizationPath := filepath.Join("tmp", t.Name()+".html")
 	require.NoError(t, os.MkdirAll(filepath.Dir(visualizationPath), 0o755))
 	require.NoError(t, porcupine.VisualizePath(lockLinearizabilityModel(), info, visualizationPath))
 	if result == porcupine.Ok {

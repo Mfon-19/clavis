@@ -11,7 +11,10 @@
 // // use lock.Token() as fencing token for downstream writes
 package client
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // ErrLeaseUnavailable indicates the heartbeat loop has failed persistently
 // and the lease health is unknown. All subsequent Acquire/Release calls will
@@ -30,5 +33,17 @@ type Client struct {
 // NewClientWithSeeds creates a client with multiple seed addresses.
 // The client will try each address and follow leader redirects automatically
 func NewClientWithSeeds(addrs []string, ownerID string) (*Client, error) {
-	
+	seeds := normalizeSeedAddrs(addrs)
+	if len(seeds) == 0 {
+		return nil, fmt.Errorf("at least one server address is required")
+	}
+	if ownerID == "" {
+		return nil, fmt.Errorf("ownerID is required")
+	}
+
+	return &Client{
+		ownerID:  ownerID,
+		resolver: newResolver(seeds),
+		session:  newLeaseSession(),
+	}, nil
 }

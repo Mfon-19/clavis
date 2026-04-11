@@ -1,8 +1,10 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	pb "github.com/Mfon-19/clavis/api/v1"
+	"log"
 	"sync"
 	"time"
 )
@@ -29,14 +31,14 @@ type leaseSession struct {
 	stopOnce sync.Once
 }
 
-// newLeaseSession creates an idle session with no active lease
+// newLeaseSession creates an idle session with no active lease.
 func newLeaseSession() *leaseSession {
 	return &leaseSession{
 		stopCh: make(chan struct{}),
 	}
 }
 
-// startLease records a newly created lease, clearing any prior error state
+// startLease records a newly created lease, clearing any prior error state.
 func (s *leaseSession) startLease(leaseID uint64, ttl time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -46,7 +48,7 @@ func (s *leaseSession) startLease(leaseID uint64, ttl time.Duration) {
 	s.leaseErr = nil
 }
 
-// ttl returns the lease's TTL, used to derive the heartbeat interval
+// ttl returns the lease's TTL, used to derive the heartbeat interval.
 func (s *leaseSession) ttl() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -55,7 +57,7 @@ func (s *leaseSession) ttl() time.Duration {
 }
 
 // activeLeaseID returns the current lease ID, or an error if the session
-// has been invalidated or no lease has been created yet
+// has been invalidated or no lease has been created yet.
 func (s *leaseSession) activeLeaseID() (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -64,7 +66,7 @@ func (s *leaseSession) activeLeaseID() (uint64, error) {
 		return 0, s.leaseErr
 	}
 	if s.leaseID == 0 {
-		return 0, fmt.Errorf("client has no active lease. call Start first")
+		return 0, fmt.Errorf("client has no active lease; call Start first")
 	}
 
 	return s.leaseID, nil
@@ -129,4 +131,108 @@ func (s *leaseSession) stop() error {
 	}
 
 	return nil
+}
+
+// openHeartbeatStream dials the given address, opens a bidirectional heartbeat
+// stream, and atomically swaps it into the session, closing any prior stream.
+func (c *Client) openHeartbeatStream(ctx context.Context, addr string) error {
+	conn, err := c.resolver.connFor(addr)
+	if err != nil {
+		return err
+	}
+
+	client := pb.NewLockServiceClient(conn)
+	stream, err := client.Heartbeat(ctx)
+	if err != nil {
+		return fmt.Errorf("heartbeat stream: %w", err)
+	}
+
+	oldStream := c.session.swapHeartbeat(stream)
+	c.resolver.rememberAddr(addr)
+
+	if oldStream != nil {
+		_ = oldStream.CloseSend()
+	}
+
+	return nil
+}
+
+// reconnectHeartbeat discovers the current leader and opens a fresh heartbeat
+// stream. Called when the existing stream breaks due to leader failover or
+// network partition.
+func (c *Client) reconnectHeartbeat(ctx context.Context) error {
+	leaderAddr, err := c.resolver.discoverLeader(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := c.openHeartbeatStream(ctx, leaderAddr); err != nil {
+		return err
+	}
+
+	log.Printf("[INFO] Re-established heartbeat stream with leader %s", leaderAddr)
+	return nil
+}
+
+// heartbeatLoop runs in a background goroutine, sending heartbeat RPCs at
+// TTL/3 intervals to keep the lease alive. On stream failure it attempts one
+// reconnect; two consecutive failures invalidate the session, causing all
+// subsequent lock operations to fail with ErrLeaseUnavailable.
+func (c *Client) heartbeatLoop(ctx context.Context) {
+	ticker := time.NewTicker(c.session.ttl() / 3)
+	defer ticker.Stop()
+
+	var failureCount int
+
+	for {
+		select {
+		case <-ticker.C:
+			leaseID, stream := c.session.heartbeatState()
+
+			if stream == nil {
+				if err := c.reconnectHeartbeat(ctx); err != nil {
+					failureCount++
+					log.Printf("[WARNING] Heartbeat reconnect failed (attempt %d): %v", failureCount, err)
+					if failureCount >= 2 {
+						log.Printf("[CRITICAL] Lease %d may expire soon - heartbeat unavailable", leaseID)
+						c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
+						return
+					}
+				}
+				continue
+			}
+
+			if err := stream.Send(&pb.HeartbeatRequest{LeaseId: leaseID}); err != nil {
+				failureCount++
+				log.Printf("[WARNING] Heartbeat send failed (attempt %d): %v", failureCount, err)
+				if err := c.reconnectHeartbeat(ctx); err != nil && failureCount >= 2 {
+					log.Printf("[CRITICAL] Lease %d may expire soon - heartbeat failing", leaseID)
+					c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
+					return
+				}
+				continue
+			}
+
+			if _, err := stream.Recv(); err != nil {
+				failureCount++
+				log.Printf("[WARNING] Heartbeat recv failed (attempt %d): %v", failureCount, err)
+				if err := c.reconnectHeartbeat(ctx); err != nil && failureCount >= 2 {
+					log.Printf("[CRITICAL] Lease %d may expire soon - heartbeat failing", leaseID)
+					c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
+					return
+				}
+				continue
+			}
+
+			if failureCount > 0 {
+				log.Printf("[INFO] Heartbeat recovered after %d failures", failureCount)
+				failureCount = 0
+			}
+
+		case <-c.session.done():
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }

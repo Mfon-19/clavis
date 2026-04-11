@@ -51,7 +51,7 @@ func main() {
 	)
 	if *nodeID == "" {
 		nid = uuid.New()
-		log.Printf("generated node id : %s", nid)
+		log.Printf("generated node id: %s", nid)
 	} else {
 		nid, err = uuid.Parse(*nodeID)
 		if err != nil {
@@ -69,7 +69,7 @@ func main() {
 		log.Fatalf("invalid gRPC advertise address: %v", err)
 	}
 
-	log.Printf("Starting lowkey node...")
+	log.Printf("Starting clavis node...")
 	log.Printf("  Node ID: %s", nid)
 	log.Printf("  Raft: %s", *raftAddr)
 	log.Printf("  Advertised Raft: %s", resolvedRaftAdvertiseAddr)
@@ -111,7 +111,7 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Println("OwO lowkey is ready")
+	log.Println("Clavis is ready")
 	log.Println("  Press Ctrl+C to stop")
 
 	select {
@@ -125,5 +125,5 @@ func main() {
 		log.Printf("shutdown error: %v", err)
 	}
 
-	log.Println(":} Shutdown complete")
+	log.Println("Shutdown complete")
 }

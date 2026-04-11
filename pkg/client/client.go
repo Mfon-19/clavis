@@ -12,8 +12,11 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	pb "github.com/Mfon-19/clavis/api/v1"
+	"time"
 )
 
 // ErrLeaseUnavailable indicates the heartbeat loop has failed persistently
@@ -46,4 +49,112 @@ func NewClientWithSeeds(addrs []string, ownerID string) (*Client, error) {
 		resolver: newResolver(seeds),
 		session:  newLeaseSession(),
 	}, nil
+}
+
+// Start creates a lease with the given TTL, opens a heartbeat stream to the
+// leader, and starts a background goroutine that sends heartbeats at TTL/3
+// intervals to keep the lease alive
+func (c *Client) Start(ctx context.Context, ttl time.Duration) error {
+	if ttl <= 0 {
+		return fmt.Errorf("ttl must be greater than 0")
+	}
+
+	resp, err := callWithFailover(c, ctx, func(client pb.LockServiceClient) (*pb.CreateLeaseResponse, error) {
+		return client.CreateLease(ctx, &pb.CreateLeaseRequest{
+			OwnerId:    c.ownerID,
+			TtlSeconds: int64(ttl.Seconds()),
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("create lease: %w", err)
+	}
+
+	c.session.startLease(resp.LeaseId, ttl)
+
+	currentAddr := c.resolver.current()
+	if currentAddr == "" {
+		currentAddr, err = c.resolver.discoverLeader(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err = c.openHeartbeatStream(ctx, currentAddr); err != nil {
+		return err
+	}
+
+	go c.heartbeatLoop(ctx)
+	return nil
+}
+
+// Acquire acquires a named distributed lock and returns a [Lock] handle.
+// The lock is bound to the client's active lease; it will be auto-released
+// if the lease expires. Use Lock.Token() for fencing.
+// Use [Client.WaitAcquire] if you want to wait for a busy lock instead of
+// receiving an immediate failed-precondition error.
+func (c *Client) Acquire(ctx context.Context, lockName string) (*Lock, error) {
+	leaseID, err := c.session.activeLeaseID()
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := callWithFailover(c, ctx, func(client pb.LockServiceClient) (*pb.AcquireLockResponse, error) {
+		return client.AcquireLock(ctx, &pb.AcquireLockRequest{
+			LockName: lockName,
+			OwnerId:  c.ownerID,
+			LeaseId:  leaseID,
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("acquire lock: %w", err)
+	}
+
+	return &Lock{
+		client:       c,
+		name:         lockName,
+		fencingToken: resp.FencingToken,
+	}, nil
+}
+
+// Release releases a held lock by name.
+func (c *Client) Release(ctx context.Context, lockName string) error {
+	leaseID, err := c.session.activeLeaseID()
+	if err != nil {
+		return err
+	}
+
+	_, err = callWithFailover(c, ctx, func(client pb.LockServiceClient) (*pb.ReleaseLockResponse, error) {
+		return client.ReleaseLock(ctx, &pb.ReleaseLockRequest{
+			LockName: lockName,
+			LeaseId:  leaseID,
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("release lock: %w", err)
+	}
+
+	return nil
+}
+
+// Status queries the cluster for health, leader info, and FSM stats.
+func (c *Client) Status(ctx context.Context) (*pb.GetStatusResponse, error) {
+	resp, err := callWithFailover(c, ctx, func(client pb.LockServiceClient) (*pb.GetStatusResponse, error) {
+		return client.GetStatus(ctx, &pb.GetStatusRequest{})
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	c.resolver.rememberStatus(resp)
+	return resp, nil
+}
+
+// Stop tears down the heartbeat stream and closes all gRPC connections.
+func (c *Client) Stop() error {
+	sessionErr := c.session.stop()
+	resolverErr := c.resolver.close()
+	if sessionErr != nil {
+		return sessionErr
+	}
+	return resolverErr
 }

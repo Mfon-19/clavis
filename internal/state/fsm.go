@@ -21,9 +21,8 @@ import (
 type FSM struct {
 	mu sync.RWMutex
 
-	locks   map[string]*domain.Lock  // lock name -> Lock
-	leases  map[uint64]*domain.Lease // lease ID -> Lease
-	members map[string]*domain.ClusterMember
+	locks  map[string]*domain.Lock  // lock name -> Lock
+	leases map[uint64]*domain.Lease // lease ID -> Lease
 
 	fencingCounter uint64 // global monotonic fencing token counter
 	nextLeaseID    uint64 // next leaseID to assign
@@ -34,7 +33,6 @@ func NewFSM() *FSM {
 	return &FSM{
 		locks:          make(map[string]*domain.Lock),
 		leases:         make(map[uint64]*domain.Lease),
-		members:        make(map[string]*domain.ClusterMember),
 		fencingCounter: 0,
 		nextLeaseID:    1,
 	}
@@ -58,10 +56,6 @@ func (f *FSM) Apply(cmd *raftlog.CommandWrapper) (any, error) {
 		return f.applyReleaseLock(cmd.GetReleaseLock())
 	case raftlog.CommandType_COMMAND_TYPE_EXPIRE_LEASE:
 		return f.applyExpireLease(cmd.GetExpireLease())
-	case raftlog.CommandType_COMMAND_TYPE_REGISTER_NODE:
-		return f.applyRegisterNode(cmd.GetRegisterNode())
-	case raftlog.CommandType_COMMAND_TYPE_DEREGISTER_NODE:
-		return f.applyDeregisterNode(cmd.GetDeregisterNode())
 	default:
 		return nil, fmt.Errorf("%w: %s", domain.ErrUnknownCommand, cmd.GetType().String())
 	}
@@ -258,40 +252,6 @@ func (f *FSM) applyExpireLease(cmd *raftlog.ExpireLeaseCommand) (any, error) {
 	}, nil
 }
 
-type RegisterNodeResponse struct {
-	Registered bool
-}
-
-func (f *FSM) applyRegisterNode(cmd *raftlog.RegisterNodeCommand) (any, error) {
-	if cmd.GetNodeId() == "" || cmd.GetRaftAddress() == "" || cmd.GetGrpcAddress() == "" {
-		return nil, domain.ErrInvalidClusterNode
-	}
-
-	member := &domain.ClusterMember{
-		NodeID:      cmd.GetNodeId(),
-		RaftAddress: cmd.GetRaftAddress(),
-		GRPCAddress: cmd.GetGrpcAddress(),
-	}
-
-	f.members[cmd.GetNodeId()] = member
-
-	return RegisterNodeResponse{Registered: true}, nil
-}
-
-type DeregisterNodeResponse struct {
-	Removed bool
-}
-
-func (f *FSM) applyDeregisterNode(cmd *raftlog.DeregisterNodeCommand) (any, error) {
-	if _, exists := f.members[cmd.GetNodeId()]; !exists {
-		return DeregisterNodeResponse{Removed: false}, nil
-	}
-
-	delete(f.members, cmd.GetNodeId())
-
-	return DeregisterNodeResponse{Removed: true}, nil
-}
-
 func (f *FSM) GetLock(lockName string) (*domain.Lock, bool) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -335,32 +295,6 @@ func (f *FSM) Stats() Stats {
 		Leases:         len(f.leases),
 		FencingCounter: f.fencingCounter,
 	}
-}
-
-func (f *FSM) GetMember(nodeID string) (*domain.ClusterMember, bool) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	member, exists := f.members[nodeID]
-	if !exists {
-		return nil, false
-	}
-
-	memberCopy := *member
-	return &memberCopy, true
-}
-
-// Members returns a snapshot of all registered cluster members.
-func (f *FSM) Members() []domain.ClusterMember {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	members := make([]domain.ClusterMember, 0, len(f.members))
-	for _, member := range f.members {
-		members = append(members, *member)
-	}
-
-	return members
 }
 
 // GetExpiredLeases returns the IDs of all leases whose expiry is at or before now.

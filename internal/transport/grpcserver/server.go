@@ -26,7 +26,7 @@ func NewServer(svc *service.Service) *Server {
 }
 
 // toProtoMembers is the only place the transport layer knows how to translate
-// domain membership metadata into public protobuf messages
+// node endpoint metadata into public protobuf messages.
 func toProtoMembers(members []domain.ClusterMember) []*pb.ClusterMember {
 	protoMembers := make([]*pb.ClusterMember, 0, len(members))
 	for _, member := range members {

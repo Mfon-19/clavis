@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.10
 // 	protoc        v6.32.0
-// source: command.proto
+// source: internal/raftlog/command.proto
 
 package raftlog
 
@@ -26,14 +26,12 @@ const (
 type CommandType int32
 
 const (
-	CommandType_COMMAND_TYPE_UNSPECIFIED     CommandType = 0
-	CommandType_COMMAND_TYPE_CREATE_LEASE    CommandType = 1
-	CommandType_COMMAND_TYPE_RENEW_LEASE     CommandType = 2
-	CommandType_COMMAND_TYPE_ACQUIRE_LOCK    CommandType = 3
-	CommandType_COMMAND_TYPE_RELEASE_LOCK    CommandType = 4
-	CommandType_COMMAND_TYPE_EXPIRE_LEASE    CommandType = 5
-	CommandType_COMMAND_TYPE_REGISTER_NODE   CommandType = 6
-	CommandType_COMMAND_TYPE_DEREGISTER_NODE CommandType = 7
+	CommandType_COMMAND_TYPE_UNSPECIFIED  CommandType = 0
+	CommandType_COMMAND_TYPE_CREATE_LEASE CommandType = 1
+	CommandType_COMMAND_TYPE_RENEW_LEASE  CommandType = 2
+	CommandType_COMMAND_TYPE_ACQUIRE_LOCK CommandType = 3
+	CommandType_COMMAND_TYPE_RELEASE_LOCK CommandType = 4
+	CommandType_COMMAND_TYPE_EXPIRE_LEASE CommandType = 5
 )
 
 // Enum value maps for CommandType.
@@ -45,18 +43,14 @@ var (
 		3: "COMMAND_TYPE_ACQUIRE_LOCK",
 		4: "COMMAND_TYPE_RELEASE_LOCK",
 		5: "COMMAND_TYPE_EXPIRE_LEASE",
-		6: "COMMAND_TYPE_REGISTER_NODE",
-		7: "COMMAND_TYPE_DEREGISTER_NODE",
 	}
 	CommandType_value = map[string]int32{
-		"COMMAND_TYPE_UNSPECIFIED":     0,
-		"COMMAND_TYPE_CREATE_LEASE":    1,
-		"COMMAND_TYPE_RENEW_LEASE":     2,
-		"COMMAND_TYPE_ACQUIRE_LOCK":    3,
-		"COMMAND_TYPE_RELEASE_LOCK":    4,
-		"COMMAND_TYPE_EXPIRE_LEASE":    5,
-		"COMMAND_TYPE_REGISTER_NODE":   6,
-		"COMMAND_TYPE_DEREGISTER_NODE": 7,
+		"COMMAND_TYPE_UNSPECIFIED":  0,
+		"COMMAND_TYPE_CREATE_LEASE": 1,
+		"COMMAND_TYPE_RENEW_LEASE":  2,
+		"COMMAND_TYPE_ACQUIRE_LOCK": 3,
+		"COMMAND_TYPE_RELEASE_LOCK": 4,
+		"COMMAND_TYPE_EXPIRE_LEASE": 5,
 	}
 )
 
@@ -71,11 +65,11 @@ func (x CommandType) String() string {
 }
 
 func (CommandType) Descriptor() protoreflect.EnumDescriptor {
-	return file_command_proto_enumTypes[0].Descriptor()
+	return file_internal_raftlog_command_proto_enumTypes[0].Descriptor()
 }
 
 func (CommandType) Type() protoreflect.EnumType {
-	return &file_command_proto_enumTypes[0]
+	return &file_internal_raftlog_command_proto_enumTypes[0]
 }
 
 func (x CommandType) Number() protoreflect.EnumNumber {
@@ -84,7 +78,7 @@ func (x CommandType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CommandType.Descriptor instead.
 func (CommandType) EnumDescriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{0}
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{0}
 }
 
 // CreateLeaseCommand creates a new lease. The service supplies created_at so
@@ -100,7 +94,7 @@ type CreateLeaseCommand struct {
 
 func (x *CreateLeaseCommand) Reset() {
 	*x = CreateLeaseCommand{}
-	mi := &file_command_proto_msgTypes[0]
+	mi := &file_internal_raftlog_command_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -112,7 +106,7 @@ func (x *CreateLeaseCommand) String() string {
 func (*CreateLeaseCommand) ProtoMessage() {}
 
 func (x *CreateLeaseCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[0]
+	mi := &file_internal_raftlog_command_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -125,7 +119,7 @@ func (x *CreateLeaseCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateLeaseCommand.ProtoReflect.Descriptor instead.
 func (*CreateLeaseCommand) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{0}
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *CreateLeaseCommand) GetOwnerId() string {
@@ -160,7 +154,7 @@ type RenewLeaseCommand struct {
 
 func (x *RenewLeaseCommand) Reset() {
 	*x = RenewLeaseCommand{}
-	mi := &file_command_proto_msgTypes[1]
+	mi := &file_internal_raftlog_command_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -172,7 +166,7 @@ func (x *RenewLeaseCommand) String() string {
 func (*RenewLeaseCommand) ProtoMessage() {}
 
 func (x *RenewLeaseCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[1]
+	mi := &file_internal_raftlog_command_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -185,7 +179,7 @@ func (x *RenewLeaseCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewLeaseCommand.ProtoReflect.Descriptor instead.
 func (*RenewLeaseCommand) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{1}
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RenewLeaseCommand) GetLeaseId() uint64 {
@@ -216,7 +210,7 @@ type AcquireLockCommand struct {
 
 func (x *AcquireLockCommand) Reset() {
 	*x = AcquireLockCommand{}
-	mi := &file_command_proto_msgTypes[2]
+	mi := &file_internal_raftlog_command_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -228,7 +222,7 @@ func (x *AcquireLockCommand) String() string {
 func (*AcquireLockCommand) ProtoMessage() {}
 
 func (x *AcquireLockCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[2]
+	mi := &file_internal_raftlog_command_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -241,7 +235,7 @@ func (x *AcquireLockCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireLockCommand.ProtoReflect.Descriptor instead.
 func (*AcquireLockCommand) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{2}
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AcquireLockCommand) GetLockName() string {
@@ -283,7 +277,7 @@ type ReleaseLockCommand struct {
 
 func (x *ReleaseLockCommand) Reset() {
 	*x = ReleaseLockCommand{}
-	mi := &file_command_proto_msgTypes[3]
+	mi := &file_internal_raftlog_command_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -295,7 +289,7 @@ func (x *ReleaseLockCommand) String() string {
 func (*ReleaseLockCommand) ProtoMessage() {}
 
 func (x *ReleaseLockCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[3]
+	mi := &file_internal_raftlog_command_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -308,7 +302,7 @@ func (x *ReleaseLockCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseLockCommand.ProtoReflect.Descriptor instead.
 func (*ReleaseLockCommand) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{3}
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ReleaseLockCommand) GetLockName() string {
@@ -337,7 +331,7 @@ type ExpireLeaseCommand struct {
 
 func (x *ExpireLeaseCommand) Reset() {
 	*x = ExpireLeaseCommand{}
-	mi := &file_command_proto_msgTypes[4]
+	mi := &file_internal_raftlog_command_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -349,7 +343,7 @@ func (x *ExpireLeaseCommand) String() string {
 func (*ExpireLeaseCommand) ProtoMessage() {}
 
 func (x *ExpireLeaseCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[4]
+	mi := &file_internal_raftlog_command_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -362,7 +356,7 @@ func (x *ExpireLeaseCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExpireLeaseCommand.ProtoReflect.Descriptor instead.
 func (*ExpireLeaseCommand) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{4}
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ExpireLeaseCommand) GetLeaseId() uint64 {
@@ -377,113 +371,6 @@ func (x *ExpireLeaseCommand) GetExpiredAtUnixNano() int64 {
 		return x.ExpiredAtUnixNano
 	}
 	return 0
-}
-
-// RegisterNodeCommand stores client-facing membership metadata in the FSM.
-// Raft membership itself is still changed through HashiCorp Raft APIs.
-type RegisterNodeCommand struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	RaftAddress   string                 `protobuf:"bytes,2,opt,name=raft_address,json=raftAddress,proto3" json:"raft_address,omitempty"`
-	GrpcAddress   string                 `protobuf:"bytes,3,opt,name=grpc_address,json=grpcAddress,proto3" json:"grpc_address,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RegisterNodeCommand) Reset() {
-	*x = RegisterNodeCommand{}
-	mi := &file_command_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegisterNodeCommand) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterNodeCommand) ProtoMessage() {}
-
-func (x *RegisterNodeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterNodeCommand.ProtoReflect.Descriptor instead.
-func (*RegisterNodeCommand) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *RegisterNodeCommand) GetNodeId() string {
-	if x != nil {
-		return x.NodeId
-	}
-	return ""
-}
-
-func (x *RegisterNodeCommand) GetRaftAddress() string {
-	if x != nil {
-		return x.RaftAddress
-	}
-	return ""
-}
-
-func (x *RegisterNodeCommand) GetGrpcAddress() string {
-	if x != nil {
-		return x.GrpcAddress
-	}
-	return ""
-}
-
-// DeregisterNodeCommand removes replicated membership metadata for a node.
-type DeregisterNodeCommand struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeregisterNodeCommand) Reset() {
-	*x = DeregisterNodeCommand{}
-	mi := &file_command_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeregisterNodeCommand) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeregisterNodeCommand) ProtoMessage() {}
-
-func (x *DeregisterNodeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeregisterNodeCommand.ProtoReflect.Descriptor instead.
-func (*DeregisterNodeCommand) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *DeregisterNodeCommand) GetNodeId() string {
-	if x != nil {
-		return x.NodeId
-	}
-	return ""
 }
 
 // CommandWrapper is the exact message serialized into each Raft log entry.
@@ -501,8 +388,6 @@ type CommandWrapper struct {
 	//	*CommandWrapper_AcquireLock
 	//	*CommandWrapper_ReleaseLock
 	//	*CommandWrapper_ExpireLease
-	//	*CommandWrapper_RegisterNode
-	//	*CommandWrapper_DeregisterNode
 	Payload       isCommandWrapper_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -510,7 +395,7 @@ type CommandWrapper struct {
 
 func (x *CommandWrapper) Reset() {
 	*x = CommandWrapper{}
-	mi := &file_command_proto_msgTypes[7]
+	mi := &file_internal_raftlog_command_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -522,7 +407,7 @@ func (x *CommandWrapper) String() string {
 func (*CommandWrapper) ProtoMessage() {}
 
 func (x *CommandWrapper) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[7]
+	mi := &file_internal_raftlog_command_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -535,7 +420,7 @@ func (x *CommandWrapper) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandWrapper.ProtoReflect.Descriptor instead.
 func (*CommandWrapper) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{7}
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CommandWrapper) GetType() CommandType {
@@ -597,24 +482,6 @@ func (x *CommandWrapper) GetExpireLease() *ExpireLeaseCommand {
 	return nil
 }
 
-func (x *CommandWrapper) GetRegisterNode() *RegisterNodeCommand {
-	if x != nil {
-		if x, ok := x.Payload.(*CommandWrapper_RegisterNode); ok {
-			return x.RegisterNode
-		}
-	}
-	return nil
-}
-
-func (x *CommandWrapper) GetDeregisterNode() *DeregisterNodeCommand {
-	if x != nil {
-		if x, ok := x.Payload.(*CommandWrapper_DeregisterNode); ok {
-			return x.DeregisterNode
-		}
-	}
-	return nil
-}
-
 type isCommandWrapper_Payload interface {
 	isCommandWrapper_Payload()
 }
@@ -639,14 +506,6 @@ type CommandWrapper_ExpireLease struct {
 	ExpireLease *ExpireLeaseCommand `protobuf:"bytes,6,opt,name=expire_lease,json=expireLease,proto3,oneof"`
 }
 
-type CommandWrapper_RegisterNode struct {
-	RegisterNode *RegisterNodeCommand `protobuf:"bytes,7,opt,name=register_node,json=registerNode,proto3,oneof"`
-}
-
-type CommandWrapper_DeregisterNode struct {
-	DeregisterNode *DeregisterNodeCommand `protobuf:"bytes,8,opt,name=deregister_node,json=deregisterNode,proto3,oneof"`
-}
-
 func (*CommandWrapper_CreateLease) isCommandWrapper_Payload() {}
 
 func (*CommandWrapper_RenewLease) isCommandWrapper_Payload() {}
@@ -657,15 +516,11 @@ func (*CommandWrapper_ReleaseLock) isCommandWrapper_Payload() {}
 
 func (*CommandWrapper_ExpireLease) isCommandWrapper_Payload() {}
 
-func (*CommandWrapper_RegisterNode) isCommandWrapper_Payload() {}
+var File_internal_raftlog_command_proto protoreflect.FileDescriptor
 
-func (*CommandWrapper_DeregisterNode) isCommandWrapper_Payload() {}
-
-var File_command_proto protoreflect.FileDescriptor
-
-const file_command_proto_rawDesc = "" +
+const file_internal_raftlog_command_proto_rawDesc = "" +
 	"\n" +
-	"\rcommand.proto\x12\araftlog\"{\n" +
+	"\x1einternal/raftlog/command.proto\x12\araftlog\"{\n" +
 	"\x12CreateLeaseCommand\x12\x19\n" +
 	"\bowner_id\x18\x01 \x01(\tR\aownerId\x12\x1b\n" +
 	"\tttl_nanos\x18\x02 \x01(\x03R\bttlNanos\x12-\n" +
@@ -683,13 +538,7 @@ const file_command_proto_rawDesc = "" +
 	"\blease_id\x18\x02 \x01(\x04R\aleaseId\"`\n" +
 	"\x12ExpireLeaseCommand\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\x04R\aleaseId\x12/\n" +
-	"\x14expired_at_unix_nano\x18\x02 \x01(\x03R\x11expiredAtUnixNano\"z\n" +
-	"\x13RegisterNodeCommand\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12!\n" +
-	"\fraft_address\x18\x02 \x01(\tR\vraftAddress\x12!\n" +
-	"\fgrpc_address\x18\x03 \x01(\tR\vgrpcAddressJ\x04\b\x04\x10\x05\"0\n" +
-	"\x15DeregisterNodeCommand\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x9c\x04\n" +
+	"\x14expired_at_unix_nano\x18\x02 \x01(\x03R\x11expiredAtUnixNano\"\x8c\x03\n" +
 	"\x0eCommandWrapper\x12(\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x14.raftlog.CommandTypeR\x04type\x12@\n" +
 	"\fcreate_lease\x18\x02 \x01(\v2\x1b.raftlog.CreateLeaseCommandH\x00R\vcreateLease\x12=\n" +
@@ -697,91 +546,81 @@ const file_command_proto_rawDesc = "" +
 	"renewLease\x12@\n" +
 	"\facquire_lock\x18\x04 \x01(\v2\x1b.raftlog.AcquireLockCommandH\x00R\vacquireLock\x12@\n" +
 	"\frelease_lock\x18\x05 \x01(\v2\x1b.raftlog.ReleaseLockCommandH\x00R\vreleaseLock\x12@\n" +
-	"\fexpire_lease\x18\x06 \x01(\v2\x1b.raftlog.ExpireLeaseCommandH\x00R\vexpireLease\x12C\n" +
-	"\rregister_node\x18\a \x01(\v2\x1c.raftlog.RegisterNodeCommandH\x00R\fregisterNode\x12I\n" +
-	"\x0fderegister_node\x18\b \x01(\v2\x1e.raftlog.DeregisterNodeCommandH\x00R\x0ederegisterNodeB\t\n" +
-	"\apayload*\x87\x02\n" +
+	"\fexpire_lease\x18\x06 \x01(\v2\x1b.raftlog.ExpireLeaseCommandH\x00R\vexpireLeaseB\t\n" +
+	"\apayload*\xc5\x01\n" +
 	"\vCommandType\x12\x1c\n" +
 	"\x18COMMAND_TYPE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19COMMAND_TYPE_CREATE_LEASE\x10\x01\x12\x1c\n" +
 	"\x18COMMAND_TYPE_RENEW_LEASE\x10\x02\x12\x1d\n" +
 	"\x19COMMAND_TYPE_ACQUIRE_LOCK\x10\x03\x12\x1d\n" +
 	"\x19COMMAND_TYPE_RELEASE_LOCK\x10\x04\x12\x1d\n" +
-	"\x19COMMAND_TYPE_EXPIRE_LEASE\x10\x05\x12\x1e\n" +
-	"\x1aCOMMAND_TYPE_REGISTER_NODE\x10\x06\x12 \n" +
-	"\x1cCOMMAND_TYPE_DEREGISTER_NODE\x10\aB,Z*github.com/Mfon-19/clavis/internal/raftlogb\x06proto3"
+	"\x19COMMAND_TYPE_EXPIRE_LEASE\x10\x05B,Z*github.com/Mfon-19/clavis/internal/raftlogb\x06proto3"
 
 var (
-	file_command_proto_rawDescOnce sync.Once
-	file_command_proto_rawDescData []byte
+	file_internal_raftlog_command_proto_rawDescOnce sync.Once
+	file_internal_raftlog_command_proto_rawDescData []byte
 )
 
-func file_command_proto_rawDescGZIP() []byte {
-	file_command_proto_rawDescOnce.Do(func() {
-		file_command_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_command_proto_rawDesc), len(file_command_proto_rawDesc)))
+func file_internal_raftlog_command_proto_rawDescGZIP() []byte {
+	file_internal_raftlog_command_proto_rawDescOnce.Do(func() {
+		file_internal_raftlog_command_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_internal_raftlog_command_proto_rawDesc), len(file_internal_raftlog_command_proto_rawDesc)))
 	})
-	return file_command_proto_rawDescData
+	return file_internal_raftlog_command_proto_rawDescData
 }
 
-var file_command_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_command_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
-var file_command_proto_goTypes = []any{
-	(CommandType)(0),              // 0: raftlog.CommandType
-	(*CreateLeaseCommand)(nil),    // 1: raftlog.CreateLeaseCommand
-	(*RenewLeaseCommand)(nil),     // 2: raftlog.RenewLeaseCommand
-	(*AcquireLockCommand)(nil),    // 3: raftlog.AcquireLockCommand
-	(*ReleaseLockCommand)(nil),    // 4: raftlog.ReleaseLockCommand
-	(*ExpireLeaseCommand)(nil),    // 5: raftlog.ExpireLeaseCommand
-	(*RegisterNodeCommand)(nil),   // 6: raftlog.RegisterNodeCommand
-	(*DeregisterNodeCommand)(nil), // 7: raftlog.DeregisterNodeCommand
-	(*CommandWrapper)(nil),        // 8: raftlog.CommandWrapper
+var file_internal_raftlog_command_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_internal_raftlog_command_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_internal_raftlog_command_proto_goTypes = []any{
+	(CommandType)(0),           // 0: raftlog.CommandType
+	(*CreateLeaseCommand)(nil), // 1: raftlog.CreateLeaseCommand
+	(*RenewLeaseCommand)(nil),  // 2: raftlog.RenewLeaseCommand
+	(*AcquireLockCommand)(nil), // 3: raftlog.AcquireLockCommand
+	(*ReleaseLockCommand)(nil), // 4: raftlog.ReleaseLockCommand
+	(*ExpireLeaseCommand)(nil), // 5: raftlog.ExpireLeaseCommand
+	(*CommandWrapper)(nil),     // 6: raftlog.CommandWrapper
 }
-var file_command_proto_depIdxs = []int32{
+var file_internal_raftlog_command_proto_depIdxs = []int32{
 	0, // 0: raftlog.CommandWrapper.type:type_name -> raftlog.CommandType
 	1, // 1: raftlog.CommandWrapper.create_lease:type_name -> raftlog.CreateLeaseCommand
 	2, // 2: raftlog.CommandWrapper.renew_lease:type_name -> raftlog.RenewLeaseCommand
 	3, // 3: raftlog.CommandWrapper.acquire_lock:type_name -> raftlog.AcquireLockCommand
 	4, // 4: raftlog.CommandWrapper.release_lock:type_name -> raftlog.ReleaseLockCommand
 	5, // 5: raftlog.CommandWrapper.expire_lease:type_name -> raftlog.ExpireLeaseCommand
-	6, // 6: raftlog.CommandWrapper.register_node:type_name -> raftlog.RegisterNodeCommand
-	7, // 7: raftlog.CommandWrapper.deregister_node:type_name -> raftlog.DeregisterNodeCommand
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
-func init() { file_command_proto_init() }
-func file_command_proto_init() {
-	if File_command_proto != nil {
+func init() { file_internal_raftlog_command_proto_init() }
+func file_internal_raftlog_command_proto_init() {
+	if File_internal_raftlog_command_proto != nil {
 		return
 	}
-	file_command_proto_msgTypes[7].OneofWrappers = []any{
+	file_internal_raftlog_command_proto_msgTypes[5].OneofWrappers = []any{
 		(*CommandWrapper_CreateLease)(nil),
 		(*CommandWrapper_RenewLease)(nil),
 		(*CommandWrapper_AcquireLock)(nil),
 		(*CommandWrapper_ReleaseLock)(nil),
 		(*CommandWrapper_ExpireLease)(nil),
-		(*CommandWrapper_RegisterNode)(nil),
-		(*CommandWrapper_DeregisterNode)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_command_proto_rawDesc), len(file_command_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_raftlog_command_proto_rawDesc), len(file_internal_raftlog_command_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_command_proto_goTypes,
-		DependencyIndexes: file_command_proto_depIdxs,
-		EnumInfos:         file_command_proto_enumTypes,
-		MessageInfos:      file_command_proto_msgTypes,
+		GoTypes:           file_internal_raftlog_command_proto_goTypes,
+		DependencyIndexes: file_internal_raftlog_command_proto_depIdxs,
+		EnumInfos:         file_internal_raftlog_command_proto_enumTypes,
+		MessageInfos:      file_internal_raftlog_command_proto_msgTypes,
 	}.Build()
-	File_command_proto = out.File
-	file_command_proto_goTypes = nil
-	file_command_proto_depIdxs = nil
+	File_internal_raftlog_command_proto = out.File
+	file_internal_raftlog_command_proto_goTypes = nil
+	file_internal_raftlog_command_proto_depIdxs = nil
 }

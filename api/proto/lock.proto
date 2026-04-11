@@ -89,7 +89,7 @@ message GetStatusResponse {
   string state = 5;             // Raft state: "leader", "follower", "candidate"
   Stats stats = 6;              // FSM statistics
   string grpc_address = 7;      // This node's gRPC address
-  repeated ClusterMember members = 9; // Replicated node metadata for discovery
+  repeated ClusterMember members = 9; // Best-effort endpoint metadata known to this node
   string leader_grpc_address = 10;    // Client-facing gRPC address of the leader
 }
 

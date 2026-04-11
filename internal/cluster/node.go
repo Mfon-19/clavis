@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/Mfon-19/clavis/internal/raftlog"
 	"github.com/Mfon-19/clavis/internal/state"
 	"github.com/google/uuid"
@@ -10,15 +11,13 @@ import (
 	"net"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 // Node wraps a Raft instance with the clavis FSM and provides a clean API for applying
-// commands, querying state, and managing cluster membership. It runs two background
-// goroutines:
+// commands, querying state, and managing cluster membership. It runs one
+// background goroutine:
 //   - leaseExpiryLoop (100ms): leader-only, expires dead leases and cascade-releases locks
-//   - membershipSyncLoop (500ms): leader-only, ensures this node's metadata is registered
 type Node struct {
 	raft         *raft.Raft
 	fsm          *state.FSM
@@ -29,9 +28,11 @@ type Node struct {
 	stopCh       chan struct{}
 	shutdownOnce sync.Once
 
-	pendingRenewalsMu       sync.Mutex
-	pendingRenewals         map[uint64]map[int64]int
-	selfRegistrationBlocked atomic.Bool
+	pendingRenewalsMu sync.Mutex
+	pendingRenewals   map[uint64]map[int64]int
+
+	endpointRegistryMu sync.RWMutex
+	endpointRegistry   map[string]domain.ClusterMember
 }
 
 // Config holds the settings for creating a new Raft node
@@ -41,7 +42,7 @@ type Config struct {
 	RaftAdvertiseAddr string    // Routable Raft address advertised to peers
 	DataDir           string    // Directory for BoltDB and snapshot storage
 	Bootstrap         bool      // True to bootstrap a new single-node cluster
-	GRPCAdvertiseAddr string    // gRPC address stored in FSM for client redirects
+	GRPCAdvertiseAddr string    // gRPC address used for client redirects
 }
 
 // NewNode creates a Raft node with BoltDB storage, TCP transport, and the
@@ -50,7 +51,7 @@ type Config struct {
 // This function is intentionally the only place that assembles the Raft stack:
 // persistent log storage, stable storage, snapshots, TCP peer transport, and
 // the FSM adapter. Once the Raft instance exists, this function also starts the
-// leader-only background loops for lease expiry and membership metadata sync
+// leader-only background loop for lease expiry
 //
 // Bootstrap should be true only for the first node in a new cluster. If the
 // data directory already contains Raft state, bootstrap is skipped so restarts
@@ -134,10 +135,16 @@ func NewNode(cfg *Config) (*Node, error) {
 		stopCh:    make(chan struct{}),
 
 		pendingRenewals: make(map[uint64]map[int64]int),
+		endpointRegistry: map[string]domain.ClusterMember{
+			cfg.NodeID.String(): {
+				NodeID:      cfg.NodeID.String(),
+				RaftAddress: cfg.RaftAdvertiseAddr,
+				GRPCAddress: cfg.GRPCAdvertiseAddr,
+			},
+		},
 	}
 
 	go node.leaseExpiryLoop()
-	go node.membershipSyncLoop()
 
 	return node, nil
 }

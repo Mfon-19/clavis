@@ -62,8 +62,8 @@ func TestRaftFSMApply(t *testing.T) {
 }
 
 // TestRaftFSMSnapshot verifies that snapshots include the full state required
-// to continue operation after restore: leases, locks, members, fencing, and the
-// next lease ID allocator value.
+// to continue operation after restore: leases, locks, fencing, and the next
+// lease ID allocator value.
 func TestRaftFSMSnapshot(t *testing.T) {
 	raftFSM := NewRaftFSM()
 	createdAt := fixedTestTime(0)
@@ -72,27 +72,17 @@ func TestRaftFSMSnapshot(t *testing.T) {
 	lease2 := mustCreateLease(t, raftFSM.fsm, "client-2", 10*time.Second, createdAt.Add(time.Second)).LeaseID
 	lock := mustAcquireLock(t, raftFSM.fsm, "snap-lock", "client-1", lease1, createdAt.Add(2*time.Second))
 
-	member := domain.ClusterMember{
-		NodeID:      "node-1",
-		RaftAddress: "127.0.0.1:7000",
-		GRPCAddress: "127.0.0.1:9000",
-	}
-	_, err := raftFSM.fsm.Apply(raftlog.NewRegisterNodeCmd(member))
-	require.NoError(t, err)
-
 	snapshot, err := raftFSM.Snapshot()
 	require.NoError(t, err)
 
 	fsmSnap := snapshot.(*fsmSnapshot)
 	require.Len(t, fsmSnap.Leases, 2)
 	require.Len(t, fsmSnap.Locks, 1)
-	require.Len(t, fsmSnap.Members, 1)
 
 	assert.Equal(t, uint64(1), fsmSnap.FencingCounter)
 	assert.Equal(t, uint64(3), fsmSnap.NextLeaseID)
 	assert.Equal(t, lease2, fsmSnap.Leases[lease2].LeaseID)
 	assert.Equal(t, lock.FencingToken, fsmSnap.Locks["snap-lock"].FencingToken)
-	assert.Equal(t, member.GRPCAddress, fsmSnap.Members[member.NodeID].GRPCAddress)
 }
 
 // TestRaftFSMRestore verifies that restoring a snapshot recreates the exact FSM
@@ -104,15 +94,8 @@ func TestRaftFSMRestore(t *testing.T) {
 	firstLease := mustCreateLease(t, original.fsm, "client-1", 10*time.Second, createdAt).LeaseID
 	firstLock := mustAcquireLock(t, original.fsm, "alpha", "client-1", firstLease, createdAt.Add(time.Second))
 
-	_, err := original.fsm.Apply(raftlog.NewRegisterNodeCmd(domain.ClusterMember{
-		NodeID:      "node-1",
-		RaftAddress: "127.0.0.1:7000",
-		GRPCAddress: "127.0.0.1:9000",
-	}))
-	require.NoError(t, err)
-
 	restored := NewRaftFSM()
-	err = restored.Restore(io.NopCloser(bytes.NewReader(snapshotBytes(t, original))))
+	err := restored.Restore(io.NopCloser(bytes.NewReader(snapshotBytes(t, original))))
 	require.NoError(t, err)
 
 	lease, exists := restored.fsm.GetLease(firstLease)
@@ -122,10 +105,6 @@ func TestRaftFSMRestore(t *testing.T) {
 	lock, exists := restored.fsm.GetLock("alpha")
 	require.True(t, exists)
 	assert.Equal(t, firstLock.FencingToken, lock.FencingToken)
-
-	member, exists := restored.fsm.GetMember("node-1")
-	require.True(t, exists)
-	assert.Equal(t, "127.0.0.1:9000", member.GRPCAddress)
 
 	assert.Equal(t, stateStats(1, 1, 1), restored.fsm.Stats())
 
@@ -150,7 +129,6 @@ func TestRaftFSMRejectsInvalidSnapshot(t *testing.T) {
 				TTL:               10 * time.Second,
 			},
 		},
-		Members:        make(map[string]*domain.ClusterMember),
 		FencingCounter: 0,
 		NextLeaseID:    2,
 	}

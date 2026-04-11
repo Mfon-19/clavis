@@ -172,38 +172,6 @@ func TestReleaseAndExpiry(t *testing.T) {
 	assert.Equal(t, stateStats(0, 1, 2), fsm.Stats())
 }
 
-// TestMembershipRegistration verifies that membership commands maintain an
-// exact replicated view of cluster member metadata and reject incomplete input.
-func TestMembership(t *testing.T) {
-	fsm := NewFSM()
-
-	member := domain.ClusterMember{
-		NodeID:      "node-1",
-		RaftAddress: "127.0.0.1:7000",
-		GRPCAddress: "127.0.0.1:9000",
-	}
-
-	result, err := fsm.Apply(raftlog.NewRegisterNodeCmd(member))
-	require.NoError(t, err)
-	assert.True(t, result.(RegisterNodeResponse).Registered)
-
-	stored, exists := fsm.GetMember(member.NodeID)
-	require.True(t, exists)
-	assert.Equal(t, &member, stored)
-	assert.Equal(t, []domain.ClusterMember{member}, fsm.Members())
-
-	result, err = fsm.Apply(raftlog.NewDeregisterNodeCmd(member.NodeID))
-	require.NoError(t, err)
-	assert.True(t, result.(DeregisterNodeResponse).Removed)
-	assert.Empty(t, fsm.Members())
-
-	_, err = fsm.Apply(raftlog.NewRegisterNodeCmd(domain.ClusterMember{
-		NodeID:      "node-2",
-		RaftAddress: "127.0.0.1:7001",
-	}))
-	assert.ErrorIs(t, err, domain.ErrInvalidClusterNode)
-}
-
 // TestRejectsCommandsWithoutTimestamps verifies that the FSM rejects malformed
 // log entries whose timestamp fields are missing, preventing nondeterministic
 // replay behavior on restore or log replication.

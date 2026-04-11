@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -86,7 +85,7 @@ func startTestCluster(t *testing.T, size int) ([]*Node, []*Config) {
 	}
 
 	waitForSingleLeader(t, nodes, 5*time.Second)
-	waitForExactMembers(t, nodes, expectedMembers(cfgs), 5*time.Second)
+	waitForMemberViews(t, nodes, expectedMembers(cfgs), 5*time.Second)
 
 	return nodes, cfgs
 }
@@ -111,7 +110,32 @@ func waitForSingleLeader(t testing.TB, nodes []*Node, timeout time.Duration) *No
 	return leader
 }
 
-func waitForExactMembers(t testing.TB, nodes []*Node, want []domain.ClusterMember, timeout time.Duration) {
+func memberViewMatches(node *Node, want []domain.ClusterMember) bool {
+	current := node.Members()
+	if len(current) != len(want) {
+		return false
+	}
+
+	selfID := node.GetNodeID().String()
+	for i := range want {
+		if current[i].NodeID != want[i].NodeID || current[i].RaftAddress != want[i].RaftAddress {
+			return false
+		}
+		if current[i].NodeID == selfID {
+			if current[i].GRPCAddress != want[i].GRPCAddress {
+				return false
+			}
+			continue
+		}
+		if current[i].GRPCAddress != "" && current[i].GRPCAddress != want[i].GRPCAddress {
+			return false
+		}
+	}
+
+	return true
+}
+
+func waitForMemberViews(t testing.TB, nodes []*Node, want []domain.ClusterMember, timeout time.Duration) {
 	t.Helper()
 
 	require.Eventually(t, func() bool {
@@ -122,12 +146,12 @@ func waitForExactMembers(t testing.TB, nodes []*Node, want []domain.ClusterMembe
 			if node.GetClusterSize() != len(want) {
 				return false
 			}
-			if !reflect.DeepEqual(node.Members(), want) {
+			if !memberViewMatches(node, want) {
 				return false
 			}
 		}
 		return true
-	}, timeout, 100*time.Millisecond, "cluster membership did not converge")
+	}, timeout, 100*time.Millisecond, "cluster membership view did not converge")
 }
 
 func waitForExactLeaseAndLockState(
@@ -150,7 +174,7 @@ func waitForExactLeaseAndLockState(
 				continue
 			}
 
-			if !reflect.DeepEqual(node.Members(), members) {
+			if !memberViewMatches(node, members) {
 				return false
 			}
 
@@ -196,7 +220,7 @@ func waitForLockReleased(
 				continue
 			}
 
-			if !reflect.DeepEqual(node.Members(), members) {
+			if !memberViewMatches(node, members) {
 				return false
 			}
 
@@ -274,9 +298,9 @@ func TestSingleNodeSmoke(t *testing.T) {
 	assert.Equal(t, state.Stats{Locks: 0, Leases: 1, FencingCounter: 1}, stats)
 }
 
-// TestClusterReplication verifies that commands applied through the
-// leader replicate the exact lease, lock, fencing, and membership state to
-// every node in a 3-node cluster.
+// TestClusterReplication verifies that commands applied through the leader
+// replicate the exact lease, lock, fencing, and authoritative Raft membership
+// state to every node in a 3-node cluster.
 func TestClusterReplication(t *testing.T) {
 	nodes, cfgs := startTestCluster(t, 3)
 	leader := waitForSingleLeader(t, nodes, 5*time.Second)

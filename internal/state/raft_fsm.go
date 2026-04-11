@@ -46,7 +46,6 @@ func (rf *RaftFSM) Snapshot() (raft.FSMSnapshot, error) {
 	snapshot := &fsmSnapshot{
 		Locks:          make(map[string]*domain.Lock),
 		Leases:         make(map[uint64]*domain.Lease),
-		Members:        make(map[string]*domain.ClusterMember),
 		FencingCounter: rf.fsm.fencingCounter,
 		NextLeaseID:    rf.fsm.nextLeaseID,
 	}
@@ -61,11 +60,6 @@ func (rf *RaftFSM) Snapshot() (raft.FSMSnapshot, error) {
 	for id, lease := range rf.fsm.leases {
 		leaseCopy := *lease
 		snapshot.Leases[id] = &leaseCopy
-	}
-
-	for nodeID, member := range rf.fsm.members {
-		memberCopy := *member
-		snapshot.Members[nodeID] = &memberCopy
 	}
 
 	return snapshot, nil
@@ -91,7 +85,6 @@ func (rf *RaftFSM) Restore(snapshot io.ReadCloser) error {
 
 	rf.fsm.locks = snap.Locks
 	rf.fsm.leases = snap.Leases
-	rf.fsm.members = snap.Members
 	rf.fsm.fencingCounter = snap.FencingCounter
 	rf.fsm.nextLeaseID = snap.NextLeaseID
 
@@ -104,9 +97,6 @@ func validateSnapshot(snap *fsmSnapshot) error {
 	}
 	if snap.Leases == nil {
 		return fmt.Errorf("snapshot leases missing")
-	}
-	if snap.Members == nil {
-		return fmt.Errorf("snapshot members missing")
 	}
 
 	for leaseID, lease := range snap.Leases {
@@ -121,15 +111,6 @@ func validateSnapshot(snap *fsmSnapshot) error {
 		}
 	}
 
-	for nodeID, member := range snap.Members {
-		if member == nil {
-			return fmt.Errorf("snapshot member %q is nil", nodeID)
-		}
-		if member.NodeID == "" || member.RaftAddress == "" || member.GRPCAddress == "" {
-			return fmt.Errorf("snapshot member %q is incomplete", nodeID)
-		}
-	}
-
 	return nil
 }
 
@@ -139,11 +120,10 @@ func (rf *RaftFSM) GetFSM() *FSM {
 
 // fsmSnapshot is the serialized, point-in-time FSM state used by Raft snapshots
 type fsmSnapshot struct {
-	Locks          map[string]*domain.Lock          `json:"locks"`
-	Leases         map[uint64]*domain.Lease         `json:"leases"`
-	Members        map[string]*domain.ClusterMember `json:"members"`
-	FencingCounter uint64                           `json:"fencing_counter"`
-	NextLeaseID    uint64                           `json:"next_lease_id"`
+	Locks          map[string]*domain.Lock  `json:"locks"`
+	Leases         map[uint64]*domain.Lease `json:"leases"`
+	FencingCounter uint64                   `json:"fencing_counter"`
+	NextLeaseID    uint64                   `json:"next_lease_id"`
 }
 
 // Persist writes the snapshot to Raft's sink. If encoding fails, the sink

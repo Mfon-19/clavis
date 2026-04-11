@@ -4,7 +4,6 @@
 package raftlog
 
 import (
-	"github.com/Mfon-19/clavis/internal/domain"
 	"time"
 )
 
@@ -74,33 +73,6 @@ func NewExpireLeaseCmd(leaseID uint64, now time.Time) *CommandWrapper {
 			ExpireLease: &ExpireLeaseCommand{
 				LeaseId:           leaseID,
 				ExpiredAtUnixNano: now.UTC().UnixNano(),
-			},
-		},
-	}
-}
-
-// NewRegisterNodeCmd builds the Raft log entry that records node metadata used
-// for discovery and leader redirects.
-func NewRegisterNodeCmd(member domain.ClusterMember) *CommandWrapper {
-	return &CommandWrapper{
-		Type: CommandType_COMMAND_TYPE_REGISTER_NODE,
-		Payload: &CommandWrapper_RegisterNode{
-			RegisterNode: &RegisterNodeCommand{
-				NodeId:      member.NodeID,
-				RaftAddress: member.RaftAddress,
-				GrpcAddress: member.GRPCAddress,
-			},
-		},
-	}
-}
-
-// NewDeregisterNodeCmd builds the Raft log entry that removes node metadata.
-func NewDeregisterNodeCmd(nodeID string) *CommandWrapper {
-	return &CommandWrapper{
-		Type: CommandType_COMMAND_TYPE_DEREGISTER_NODE,
-		Payload: &CommandWrapper_DeregisterNode{
-			DeregisterNode: &DeregisterNodeCommand{
-				NodeId: nodeID,
 			},
 		},
 	}

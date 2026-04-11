@@ -182,8 +182,8 @@ func (s *Service) LockState(lockName string) (*LockStateResult, error) {
 	}, nil
 }
 
-// Status returns cluster health, leader info, and FSM stats. This is the only
-// read path that bypasses Raft consensus.
+// Status returns cluster health, leader info, local endpoint metadata, and FSM
+// stats. This is the only read path that bypasses Raft consensus.
 func (s *Service) Status() *StatusResult {
 	stats := s.node.Stats()
 	self := s.node.SelfMember()

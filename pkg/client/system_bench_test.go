@@ -1,9 +1,12 @@
-package client
+package client_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	pb "github.com/Mfon-19/clavis/api/v1"
 	"github.com/Mfon-19/clavis/internal/app"
+	clientpkg "github.com/Mfon-19/clavis/pkg/client"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -44,7 +47,7 @@ func newBenchmarkCluster(tb testing.TB, nodes int) *benchmarkCluster {
 		raftAddr := freeLocalAddr(tb)
 		grpcAddr := freeLocalAddr(tb)
 
-		runtime, err := app.New(app.Config{
+		runtime, err := app.NewRuntime(app.Config{
 			NodeID:            uuid.New(),
 			RaftAddr:          raftAddr,
 			RaftAdvertiseAddr: raftAddr,

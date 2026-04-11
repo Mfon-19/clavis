@@ -1,7 +1,7 @@
-// Package clavis Command clavis starts a distributed lock service node. It supports
+// Command clavis starts a distributed lock service node. It supports
 // bootstrapping a new cluster, joining an existing one, and removing nodes
-// via CLI flags. The node runs a Raft consensus group and a gRPC lock service
-package clavis
+// via CLI flags. The node runs a Raft consensus group and a gRPC lock service.
+package main
 
 import (
 	"context"

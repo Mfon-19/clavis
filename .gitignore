@@ -1,2 +1,4 @@
 .idea
 tmp
+arch.md
+jepsen/store

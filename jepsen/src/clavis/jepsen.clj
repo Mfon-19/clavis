@@ -26,6 +26,7 @@
       (java.util UUID)))
 
 (def remote-binary "/opt/clavis/clavis")
+(def uploaded-binary "/home/ubuntu/clavis")
 (def data-root "/var/lib/clavis")
 (def log-file "/var/log/clavis.log")
 (def pid-file "/var/run/clavis.pid")
@@ -51,11 +52,11 @@
 
 (defn sh
   [& parts]
-  (c/exec :bash :-lc (str/join " " parts)))
+  (c/exec :sudo :bash :-lc (str/join " " parts)))
 
 (defn sh!
   [& commands]
-  (c/exec :bash :-lc (str/join " ; " commands)))
+  (c/exec :sudo :bash :-lc (str/join " ; " commands)))
 
 (defn kill-clavis!
   []
@@ -103,7 +104,7 @@
                  (conj base "--bootstrap")
                  (conj base "--join" (select-join-target! test node)))]
       (info "starting clavis" node (str/join " " args))
-      (c/exec :bash :-lc
+      (c/exec :sudo :bash :-lc
               (str "nohup " (str/join " " args)
                    " >> " log-file " 2>&1 & echo $! > " pid-file)))
     (Thread/sleep (if bootstrap? 3000 5000))))
@@ -113,8 +114,9 @@
   (setup! [_ test node]
     (info "installing clavis on" node)
     (sh "mkdir -p /opt/clavis")
-    (c/upload binary remote-binary)
-    (sh! (str "chmod +x " remote-binary)
+    (c/upload binary uploaded-binary)
+    (sh! (str "cp " uploaded-binary " " remote-binary)
+         (str "chmod +x " remote-binary)
          (str "mkdir -p " data-root)
          (str "rm -rf " data-root "/*")
          (str "touch " log-file))

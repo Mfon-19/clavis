@@ -64,10 +64,32 @@
        "pkill -9 -x clavis 2>/dev/null || true"
        (str "rm -f " pid-file)))
 
+(defn seed-targets
+  [test node]
+  (->> (:nodes test)
+       (remove #{node})
+       (map #(str % ":9000"))))
+
+(defn select-join-target!
+  [test node]
+  (let [targets (seed-targets test node)
+        probe-script (str
+                      "for i in $(seq 1 60); do "
+                      "for target in " (str/join " " targets) "; do "
+                      "host=${target%:*}; port=${target#*:}; "
+                      "(: </dev/tcp/$host/$port) >/dev/null 2>&1 && echo $target && exit 0; "
+                      "done; "
+                      "sleep 1; "
+                      "done; "
+                      "exit 1")
+        join-target (str/trim (c/exec :bash :-lc probe-script))]
+    (when (str/blank? join-target)
+      (throw (ex-info "failed to find a reachable join target" {:node node :targets targets})))
+    join-target))
+
 (defn start-clavis!
   [test node]
-  (let [first-node (first (:nodes test))
-        bootstrap? (= node first-node)
+  (let [bootstrap? (= node (first (:nodes test)))
         data-dir (str data-root "/" (node-id test node))
         base [remote-binary
               "--node-id" (node-id test node)
@@ -75,20 +97,15 @@
               "--raft-advertise-addr" (str node ":7000")
               "--grpc-addr" ":9000"
               "--grpc-advertise-addr" (str node ":9000")
-              "--data-dir" data-dir]
-        args (if bootstrap?
-               (conj base "--bootstrap")
-               (conj base "--join" (str first-node ":9000")))]
+              "--data-dir" data-dir]]
     (sh "mkdir -p" data-dir)
-    (when-not bootstrap?
-              (sh (str "for i in $(seq 1 60); do "
-                       "(: </dev/tcp/" first-node "/9000) >/dev/null 2>&1 && exit 0; "
-                       "sleep 1; "
-                       "done; exit 1")))
-    (info "starting clavis" node (str/join " " args))
-    (c/exec :bash :-lc
-            (str "nohup " (str/join " " args)
-                 " >> " log-file " 2>&1 & echo $! > " pid-file))
+    (let [args (if bootstrap?
+                 (conj base "--bootstrap")
+                 (conj base "--join" (select-join-target! test node)))]
+      (info "starting clavis" node (str/join " " args))
+      (c/exec :bash :-lc
+              (str "nohup " (str/join " " args)
+                   " >> " log-file " 2>&1 & echo $! > " pid-file)))
     (Thread/sleep (if bootstrap? 3000 5000))))
 
 (defrecord ClavisDB [binary]

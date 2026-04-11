@@ -1,9 +1,17 @@
 package client
 
 import (
+	"context"
+	"fmt"
+	pb "github.com/Mfon-19/clavis/api/v1"
+	"github.com/Mfon-19/clavis/internal/transport/leaderhint"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"strings"
 	"sync"
+	"time"
 )
 
 // resolver maintains a pool of gRPC connections to cluster nodes and tracks the
@@ -56,4 +64,228 @@ func normalizeSeedAddrs(addrs []string) []string {
 	}
 
 	return normalized
+}
+
+// dialConn opens a raw gRPC connection to a cluster node
+func dialConn(addr string) (*grpc.ClientConn, error) {
+	return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+}
+
+// connFor returns a pooled connection for the given address, creating one if
+// needed. Concurrent callers for the same address are safe; the loser's
+// connection is closed and the winner's is reused
+func (r *resolver) connFor(addr string) (*grpc.ClientConn, error) {
+	r.mu.Lock()
+	if conn := r.conns[addr]; conn != nil {
+		r.mu.Unlock()
+		return conn, nil
+	}
+	r.mu.Unlock()
+
+	conn, err := dialConn(addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to %s: %w", addr, err)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if existing := r.conns[addr]; existing != nil {
+		_ = conn.Close()
+		return existing, nil
+	}
+
+	if r.conns == nil {
+		r.conns = make(map[string]*grpc.ClientConn)
+	}
+	r.conns[addr] = conn
+	return conn, nil
+}
+
+// close drains a connection pool, closing all cached gRPC connections
+func (r *resolver) close() error {
+	r.mu.Lock()
+	conns := r.conns
+	r.conns = make(map[string]*grpc.ClientConn)
+	r.mu.Unlock()
+
+	var firstErr error
+	for _, conn := range conns {
+		if err := conn.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	return firstErr
+}
+
+// current returns the last known leader address, or empty if unknown
+func (r *resolver) current() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.currentAddr
+}
+
+// candidateAddrs returns deduplicated addresses to try, with the current
+// (likely leader) address first, followed by all seed addresses
+func (r *resolver) candidateAddrs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	seen := make(map[string]struct{})
+	addrs := make([]string, 0, len(r.seedAddrs)+1)
+
+	if r.currentAddr != "" {
+		addrs = append(addrs, r.currentAddr)
+		seen[r.currentAddr] = struct{}{}
+	}
+
+	for _, addr := range r.seedAddrs {
+		if _, exists := seen[addr]; exists {
+			continue
+		}
+		addrs = append(addrs, addr)
+		seen[addr] = struct{}{}
+	}
+
+	return addrs
+}
+
+// rememberAddr updates the current address and adds it to the seed list if
+// not already present, so future discovery rounds include it.
+func (r *resolver) rememberAddr(addr string) {
+	if addr == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentAddr = addr
+	for _, existing := range r.seedAddrs {
+		if existing == addr {
+			return
+		}
+	}
+	r.seedAddrs = append(r.seedAddrs, addr)
+}
+
+// rememberStatus extracts all known addresses from a status response (this
+// node, leader, and cluster members) and adds them to the seed list.
+func (r *resolver) rememberStatus(resp *pb.GetStatusResponse) {
+	if resp == nil {
+		return
+	}
+
+	r.rememberAddr(resp.GrpcAddress)
+	r.rememberAddr(resp.LeaderGrpcAddress)
+	for _, member := range resp.Members {
+		r.rememberAddr(member.GetGrpcAddress())
+	}
+}
+
+// discoverLeader probes all candidate addresses via GetStatus RPCs,
+// following leader redirects, and returns the first confirmed
+// leader address. Returns an error if no leader can be found
+func (r *resolver) discoverLeader(ctx context.Context) (string, error) {
+	var lastErr error
+
+	for _, addr := range r.candidateAddrs() {
+		statusCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		conn, err := r.connFor(addr)
+		if err != nil {
+			cancel()
+			lastErr = err
+			continue
+		}
+		client := pb.NewLockServiceClient(conn)
+
+		resp, err := client.GetStatus(statusCtx, &pb.GetStatusRequest{})
+		cancel()
+		if err != nil {
+			lastErr = err
+			if leaderAddr := leaderhint.FromError(err); leaderAddr != "" {
+				r.rememberAddr(leaderAddr)
+				return leaderAddr, nil
+			}
+			continue
+		}
+
+		r.rememberStatus(resp)
+		switch {
+		case resp.GetLeaderGrpcAddress() != "":
+			return resp.GetLeaderGrpcAddress(), nil
+		case resp.GetIsLeader() && resp.GetGrpcAddress() != "":
+			return resp.GetGrpcAddress(), nil
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no reachable cluster nodes")
+	}
+
+	return "", fmt.Errorf("discover leader: %w", lastErr)
+}
+
+// callWithFailover executes on SDK RPC against the cluster with automatic
+// leader chasing. This function is generic so Acquire, Release, CreateLease,
+// and Status all share the same retry behaviour
+func callWithFailover[T any](c *Client, ctx context.Context, op func(pb.LockServiceClient) (T, error)) (T, error) {
+	var zero T
+	var lastErr error
+	seen := make(map[string]struct{})
+	queue := append([]string(nil), c.resolver.candidateAddrs()...)
+
+	for attempts := 0; attempts < len(queue)+3; attempts++ {
+		if attempts >= len(queue) {
+			leaderAddr, err := c.resolver.discoverLeader(ctx)
+			if err != nil {
+				if lastErr != nil {
+					return zero, lastErr
+				}
+				return zero, err
+			}
+			queue = append(queue, leaderAddr)
+		}
+
+		addr := queue[attempts]
+		if addr == "" {
+			continue
+		}
+		if _, exists := seen[addr]; exists {
+			continue
+		}
+		seen[addr] = struct{}{}
+
+		conn, err := c.resolver.connFor(addr)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		client := pb.NewLockServiceClient(conn)
+
+		resp, err := op(client)
+		if err == nil {
+			c.resolver.rememberAddr(addr)
+			return resp, nil
+		}
+
+		lastErr = err
+		if leaderAddr := leaderhint.FromError(err); leaderAddr != "" {
+			c.resolver.rememberAddr(leaderAddr)
+			queue = append([]string{leaderAddr}, queue...)
+			continue
+		}
+
+		if status.Code(err) != codes.Unavailable {
+			return zero, err
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("all cluster addresses failed")
+	}
+
+	return zero, lastErr
 }

@@ -1,6 +1,6 @@
 # Clavis Examples
 
-These examples are deliberately small and focused on the three strongest Clavis use cases:
+These examples are small and focused on the three strongest Clavis use cases:
 
 - `postgres-job-runner`: a singleton scheduled job with fenced downstream writes
 - `controller-leader`: active/passive controller leadership

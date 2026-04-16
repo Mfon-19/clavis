@@ -79,11 +79,12 @@ func (c *Client) Start(ctx context.Context, ttl time.Duration) error {
 		}
 	}
 
-	if err = c.openHeartbeatStream(ctx, currentAddr); err != nil {
+	sessionCtx := c.session.context()
+	if err = c.openHeartbeatStream(sessionCtx, currentAddr); err != nil {
 		return err
 	}
 
-	go c.heartbeatLoop(ctx)
+	go c.heartbeatLoop(sessionCtx)
 	return nil
 }
 

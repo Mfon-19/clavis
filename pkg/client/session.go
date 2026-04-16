@@ -27,14 +27,17 @@ type leaseSession struct {
 
 	heartbeat pb.LockService_HeartbeatClient
 
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	runCtx    context.Context
+	runCancel context.CancelFunc
+	stopOnce  sync.Once
 }
 
 // newLeaseSession creates an idle session with no active lease.
 func newLeaseSession() *leaseSession {
+	runCtx, runCancel := context.WithCancel(context.Background())
 	return &leaseSession{
-		stopCh: make(chan struct{}),
+		runCtx:    runCtx,
+		runCancel: runCancel,
 	}
 }
 
@@ -108,17 +111,17 @@ func (s *leaseSession) invalidate(err error) {
 	}
 }
 
-// done returns a channel that is closed when Stop is called, signaling the
-// heartbeat goroutine to exit.
-func (s *leaseSession) done() <-chan struct{} {
-	return s.stopCh
+// context returns the session-owned context that controls the background
+// heartbeat lifetime. Start's caller context is only a startup deadline.
+func (s *leaseSession) context() context.Context {
+	return s.runCtx
 }
 
 // stop signals the heartbeat goroutine to exit and closes the stream
 // connection. Safe to call multiple times.
 func (s *leaseSession) stop() error {
 	s.stopOnce.Do(func() {
-		close(s.stopCh)
+		s.runCancel()
 	})
 
 	s.mu.Lock()
@@ -229,8 +232,6 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 				failureCount = 0
 			}
 
-		case <-c.session.done():
-			return
 		case <-ctx.Done():
 			return
 		}

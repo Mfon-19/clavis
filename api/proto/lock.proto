@@ -89,8 +89,8 @@ message GetStatusResponse {
   string state = 5;             // Raft state: "leader", "follower", "candidate"
   Stats stats = 6;              // FSM statistics
   string grpc_address = 7;      // This node's gRPC address
-  repeated ClusterMember members = 9; // Best-effort endpoint metadata known to this node
-  string leader_grpc_address = 10;    // Client-facing gRPC address of the leader
+  repeated ClusterMember members = 9; // Active Raft members joined with shared gRPC endpoint metadata
+  string leader_grpc_address = 10;    // Client-facing gRPC address of the leader from shared endpoint metadata
 }
 
 // LeaderHint is attached to "not leader" gRPC errors as structured status

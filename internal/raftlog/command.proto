@@ -13,6 +13,8 @@ enum CommandType {
   COMMAND_TYPE_ACQUIRE_LOCK = 3;
   COMMAND_TYPE_RELEASE_LOCK = 4;
   COMMAND_TYPE_EXPIRE_LEASE = 5;
+  COMMAND_TYPE_UPSERT_ENDPOINT = 6;
+  COMMAND_TYPE_REMOVE_ENDPOINT = 7;
 }
 
 // CreateLeaseCommand creates a new lease. The service supplies created_at so
@@ -51,6 +53,19 @@ message ExpireLeaseCommand {
   int64 expired_at_unix_nano = 2;
 }
 
+// UpsertEndpointCommand stores client-facing gRPC endpoint metadata by node ID.
+// Raft configuration remains the source of truth for actual membership.
+message UpsertEndpointCommand {
+  string node_id = 1;
+  string grpc_address = 2;
+}
+
+// RemoveEndpointCommand deletes stored endpoint metadata for a node ID.
+// This is best-effort cleanup; Raft membership is enforced separately.
+message RemoveEndpointCommand {
+  string node_id = 1;
+}
+
 // CommandWrapper is the exact message serialized into each Raft log entry.
 // The explicit type is redundant with the oneof, but it keeps tracing and
 // switch statements simple and stable across generated-code changes.
@@ -64,5 +79,7 @@ message CommandWrapper {
     AcquireLockCommand acquire_lock = 4;
     ReleaseLockCommand release_lock = 5;
     ExpireLeaseCommand expire_lease = 6;
+    UpsertEndpointCommand upsert_endpoint = 7;
+    RemoveEndpointCommand remove_endpoint = 8;
   }
 }

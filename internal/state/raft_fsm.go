@@ -46,6 +46,7 @@ func (rf *RaftFSM) Snapshot() (raft.FSMSnapshot, error) {
 	snapshot := &fsmSnapshot{
 		Locks:          make(map[string]*domain.Lock),
 		Leases:         make(map[uint64]*domain.Lease),
+		Endpoints:      make(map[string]string),
 		FencingCounter: rf.fsm.fencingCounter,
 		NextLeaseID:    rf.fsm.nextLeaseID,
 	}
@@ -60,6 +61,10 @@ func (rf *RaftFSM) Snapshot() (raft.FSMSnapshot, error) {
 	for id, lease := range rf.fsm.leases {
 		leaseCopy := *lease
 		snapshot.Leases[id] = &leaseCopy
+	}
+
+	for nodeID, grpcAddr := range rf.fsm.endpoints {
+		snapshot.Endpoints[nodeID] = grpcAddr
 	}
 
 	return snapshot, nil
@@ -85,6 +90,7 @@ func (rf *RaftFSM) Restore(snapshot io.ReadCloser) error {
 
 	rf.fsm.locks = snap.Locks
 	rf.fsm.leases = snap.Leases
+	rf.fsm.endpoints = snap.Endpoints
 	rf.fsm.fencingCounter = snap.FencingCounter
 	rf.fsm.nextLeaseID = snap.NextLeaseID
 
@@ -97,6 +103,9 @@ func validateSnapshot(snap *fsmSnapshot) error {
 	}
 	if snap.Leases == nil {
 		return fmt.Errorf("snapshot leases missing")
+	}
+	if snap.Endpoints == nil {
+		return fmt.Errorf("snapshot endpoints missing")
 	}
 
 	for leaseID, lease := range snap.Leases {
@@ -111,6 +120,15 @@ func validateSnapshot(snap *fsmSnapshot) error {
 		}
 	}
 
+	for nodeID, grpcAddr := range snap.Endpoints {
+		if nodeID == "" {
+			return fmt.Errorf("snapshot endpoint has empty node id")
+		}
+		if grpcAddr == "" {
+			return fmt.Errorf("snapshot endpoint %s has empty grpc address", nodeID)
+		}
+	}
+
 	return nil
 }
 
@@ -122,6 +140,7 @@ func (rf *RaftFSM) GetFSM() *FSM {
 type fsmSnapshot struct {
 	Locks          map[string]*domain.Lock  `json:"locks"`
 	Leases         map[uint64]*domain.Lease `json:"leases"`
+	Endpoints      map[string]string        `json:"endpoints"`
 	FencingCounter uint64                   `json:"fencing_counter"`
 	NextLeaseID    uint64                   `json:"next_lease_id"`
 }

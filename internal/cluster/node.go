@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"fmt"
-	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/Mfon-19/clavis/internal/raftlog"
 	"github.com/Mfon-19/clavis/internal/state"
 	"github.com/google/uuid"
@@ -30,9 +29,6 @@ type Node struct {
 
 	pendingRenewalsMu sync.Mutex
 	pendingRenewals   map[uint64]map[int64]int
-
-	endpointRegistryMu sync.RWMutex
-	endpointRegistry   map[string]domain.ClusterMember
 }
 
 // Config holds the settings for creating a new Raft node
@@ -135,16 +131,10 @@ func NewNode(cfg *Config) (*Node, error) {
 		stopCh:    make(chan struct{}),
 
 		pendingRenewals: make(map[uint64]map[int64]int),
-		endpointRegistry: map[string]domain.ClusterMember{
-			cfg.NodeID.String(): {
-				NodeID:      cfg.NodeID.String(),
-				RaftAddress: cfg.RaftAdvertiseAddr,
-				GRPCAddress: cfg.GRPCAdvertiseAddr,
-			},
-		},
 	}
 
 	go node.leaseExpiryLoop()
+	go node.endpointMetadataLoop()
 
 	return node, nil
 }

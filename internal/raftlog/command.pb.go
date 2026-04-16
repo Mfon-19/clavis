@@ -26,12 +26,14 @@ const (
 type CommandType int32
 
 const (
-	CommandType_COMMAND_TYPE_UNSPECIFIED  CommandType = 0
-	CommandType_COMMAND_TYPE_CREATE_LEASE CommandType = 1
-	CommandType_COMMAND_TYPE_RENEW_LEASE  CommandType = 2
-	CommandType_COMMAND_TYPE_ACQUIRE_LOCK CommandType = 3
-	CommandType_COMMAND_TYPE_RELEASE_LOCK CommandType = 4
-	CommandType_COMMAND_TYPE_EXPIRE_LEASE CommandType = 5
+	CommandType_COMMAND_TYPE_UNSPECIFIED     CommandType = 0
+	CommandType_COMMAND_TYPE_CREATE_LEASE    CommandType = 1
+	CommandType_COMMAND_TYPE_RENEW_LEASE     CommandType = 2
+	CommandType_COMMAND_TYPE_ACQUIRE_LOCK    CommandType = 3
+	CommandType_COMMAND_TYPE_RELEASE_LOCK    CommandType = 4
+	CommandType_COMMAND_TYPE_EXPIRE_LEASE    CommandType = 5
+	CommandType_COMMAND_TYPE_UPSERT_ENDPOINT CommandType = 6
+	CommandType_COMMAND_TYPE_REMOVE_ENDPOINT CommandType = 7
 )
 
 // Enum value maps for CommandType.
@@ -43,14 +45,18 @@ var (
 		3: "COMMAND_TYPE_ACQUIRE_LOCK",
 		4: "COMMAND_TYPE_RELEASE_LOCK",
 		5: "COMMAND_TYPE_EXPIRE_LEASE",
+		6: "COMMAND_TYPE_UPSERT_ENDPOINT",
+		7: "COMMAND_TYPE_REMOVE_ENDPOINT",
 	}
 	CommandType_value = map[string]int32{
-		"COMMAND_TYPE_UNSPECIFIED":  0,
-		"COMMAND_TYPE_CREATE_LEASE": 1,
-		"COMMAND_TYPE_RENEW_LEASE":  2,
-		"COMMAND_TYPE_ACQUIRE_LOCK": 3,
-		"COMMAND_TYPE_RELEASE_LOCK": 4,
-		"COMMAND_TYPE_EXPIRE_LEASE": 5,
+		"COMMAND_TYPE_UNSPECIFIED":     0,
+		"COMMAND_TYPE_CREATE_LEASE":    1,
+		"COMMAND_TYPE_RENEW_LEASE":     2,
+		"COMMAND_TYPE_ACQUIRE_LOCK":    3,
+		"COMMAND_TYPE_RELEASE_LOCK":    4,
+		"COMMAND_TYPE_EXPIRE_LEASE":    5,
+		"COMMAND_TYPE_UPSERT_ENDPOINT": 6,
+		"COMMAND_TYPE_REMOVE_ENDPOINT": 7,
 	}
 )
 
@@ -373,6 +379,106 @@ func (x *ExpireLeaseCommand) GetExpiredAtUnixNano() int64 {
 	return 0
 }
 
+// UpsertEndpointCommand stores client-facing gRPC endpoint metadata by node ID.
+// Raft configuration remains the source of truth for actual membership.
+type UpsertEndpointCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	GrpcAddress   string                 `protobuf:"bytes,2,opt,name=grpc_address,json=grpcAddress,proto3" json:"grpc_address,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpsertEndpointCommand) Reset() {
+	*x = UpsertEndpointCommand{}
+	mi := &file_internal_raftlog_command_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpsertEndpointCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpsertEndpointCommand) ProtoMessage() {}
+
+func (x *UpsertEndpointCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_raftlog_command_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpsertEndpointCommand.ProtoReflect.Descriptor instead.
+func (*UpsertEndpointCommand) Descriptor() ([]byte, []int) {
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *UpsertEndpointCommand) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *UpsertEndpointCommand) GetGrpcAddress() string {
+	if x != nil {
+		return x.GrpcAddress
+	}
+	return ""
+}
+
+// RemoveEndpointCommand deletes stored endpoint metadata for a node ID.
+// This is best-effort cleanup; Raft membership is enforced separately.
+type RemoveEndpointCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveEndpointCommand) Reset() {
+	*x = RemoveEndpointCommand{}
+	mi := &file_internal_raftlog_command_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveEndpointCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveEndpointCommand) ProtoMessage() {}
+
+func (x *RemoveEndpointCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_raftlog_command_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveEndpointCommand.ProtoReflect.Descriptor instead.
+func (*RemoveEndpointCommand) Descriptor() ([]byte, []int) {
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RemoveEndpointCommand) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
 // CommandWrapper is the exact message serialized into each Raft log entry.
 // The explicit type is redundant with the oneof, but it keeps tracing and
 // switch statements simple and stable across generated-code changes.
@@ -388,6 +494,8 @@ type CommandWrapper struct {
 	//	*CommandWrapper_AcquireLock
 	//	*CommandWrapper_ReleaseLock
 	//	*CommandWrapper_ExpireLease
+	//	*CommandWrapper_UpsertEndpoint
+	//	*CommandWrapper_RemoveEndpoint
 	Payload       isCommandWrapper_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -395,7 +503,7 @@ type CommandWrapper struct {
 
 func (x *CommandWrapper) Reset() {
 	*x = CommandWrapper{}
-	mi := &file_internal_raftlog_command_proto_msgTypes[5]
+	mi := &file_internal_raftlog_command_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -407,7 +515,7 @@ func (x *CommandWrapper) String() string {
 func (*CommandWrapper) ProtoMessage() {}
 
 func (x *CommandWrapper) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_raftlog_command_proto_msgTypes[5]
+	mi := &file_internal_raftlog_command_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -420,7 +528,7 @@ func (x *CommandWrapper) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandWrapper.ProtoReflect.Descriptor instead.
 func (*CommandWrapper) Descriptor() ([]byte, []int) {
-	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{5}
+	return file_internal_raftlog_command_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CommandWrapper) GetType() CommandType {
@@ -482,6 +590,24 @@ func (x *CommandWrapper) GetExpireLease() *ExpireLeaseCommand {
 	return nil
 }
 
+func (x *CommandWrapper) GetUpsertEndpoint() *UpsertEndpointCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandWrapper_UpsertEndpoint); ok {
+			return x.UpsertEndpoint
+		}
+	}
+	return nil
+}
+
+func (x *CommandWrapper) GetRemoveEndpoint() *RemoveEndpointCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*CommandWrapper_RemoveEndpoint); ok {
+			return x.RemoveEndpoint
+		}
+	}
+	return nil
+}
+
 type isCommandWrapper_Payload interface {
 	isCommandWrapper_Payload()
 }
@@ -506,6 +632,14 @@ type CommandWrapper_ExpireLease struct {
 	ExpireLease *ExpireLeaseCommand `protobuf:"bytes,6,opt,name=expire_lease,json=expireLease,proto3,oneof"`
 }
 
+type CommandWrapper_UpsertEndpoint struct {
+	UpsertEndpoint *UpsertEndpointCommand `protobuf:"bytes,7,opt,name=upsert_endpoint,json=upsertEndpoint,proto3,oneof"`
+}
+
+type CommandWrapper_RemoveEndpoint struct {
+	RemoveEndpoint *RemoveEndpointCommand `protobuf:"bytes,8,opt,name=remove_endpoint,json=removeEndpoint,proto3,oneof"`
+}
+
 func (*CommandWrapper_CreateLease) isCommandWrapper_Payload() {}
 
 func (*CommandWrapper_RenewLease) isCommandWrapper_Payload() {}
@@ -515,6 +649,10 @@ func (*CommandWrapper_AcquireLock) isCommandWrapper_Payload() {}
 func (*CommandWrapper_ReleaseLock) isCommandWrapper_Payload() {}
 
 func (*CommandWrapper_ExpireLease) isCommandWrapper_Payload() {}
+
+func (*CommandWrapper_UpsertEndpoint) isCommandWrapper_Payload() {}
+
+func (*CommandWrapper_RemoveEndpoint) isCommandWrapper_Payload() {}
 
 var File_internal_raftlog_command_proto protoreflect.FileDescriptor
 
@@ -538,7 +676,12 @@ const file_internal_raftlog_command_proto_rawDesc = "" +
 	"\blease_id\x18\x02 \x01(\x04R\aleaseId\"`\n" +
 	"\x12ExpireLeaseCommand\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\x04R\aleaseId\x12/\n" +
-	"\x14expired_at_unix_nano\x18\x02 \x01(\x03R\x11expiredAtUnixNano\"\x8c\x03\n" +
+	"\x14expired_at_unix_nano\x18\x02 \x01(\x03R\x11expiredAtUnixNano\"S\n" +
+	"\x15UpsertEndpointCommand\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12!\n" +
+	"\fgrpc_address\x18\x02 \x01(\tR\vgrpcAddress\"0\n" +
+	"\x15RemoveEndpointCommand\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xa2\x04\n" +
 	"\x0eCommandWrapper\x12(\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x14.raftlog.CommandTypeR\x04type\x12@\n" +
 	"\fcreate_lease\x18\x02 \x01(\v2\x1b.raftlog.CreateLeaseCommandH\x00R\vcreateLease\x12=\n" +
@@ -546,15 +689,19 @@ const file_internal_raftlog_command_proto_rawDesc = "" +
 	"renewLease\x12@\n" +
 	"\facquire_lock\x18\x04 \x01(\v2\x1b.raftlog.AcquireLockCommandH\x00R\vacquireLock\x12@\n" +
 	"\frelease_lock\x18\x05 \x01(\v2\x1b.raftlog.ReleaseLockCommandH\x00R\vreleaseLock\x12@\n" +
-	"\fexpire_lease\x18\x06 \x01(\v2\x1b.raftlog.ExpireLeaseCommandH\x00R\vexpireLeaseB\t\n" +
-	"\apayload*\xc5\x01\n" +
+	"\fexpire_lease\x18\x06 \x01(\v2\x1b.raftlog.ExpireLeaseCommandH\x00R\vexpireLease\x12I\n" +
+	"\x0fupsert_endpoint\x18\a \x01(\v2\x1e.raftlog.UpsertEndpointCommandH\x00R\x0eupsertEndpoint\x12I\n" +
+	"\x0fremove_endpoint\x18\b \x01(\v2\x1e.raftlog.RemoveEndpointCommandH\x00R\x0eremoveEndpointB\t\n" +
+	"\apayload*\x89\x02\n" +
 	"\vCommandType\x12\x1c\n" +
 	"\x18COMMAND_TYPE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19COMMAND_TYPE_CREATE_LEASE\x10\x01\x12\x1c\n" +
 	"\x18COMMAND_TYPE_RENEW_LEASE\x10\x02\x12\x1d\n" +
 	"\x19COMMAND_TYPE_ACQUIRE_LOCK\x10\x03\x12\x1d\n" +
 	"\x19COMMAND_TYPE_RELEASE_LOCK\x10\x04\x12\x1d\n" +
-	"\x19COMMAND_TYPE_EXPIRE_LEASE\x10\x05B,Z*github.com/Mfon-19/clavis/internal/raftlogb\x06proto3"
+	"\x19COMMAND_TYPE_EXPIRE_LEASE\x10\x05\x12 \n" +
+	"\x1cCOMMAND_TYPE_UPSERT_ENDPOINT\x10\x06\x12 \n" +
+	"\x1cCOMMAND_TYPE_REMOVE_ENDPOINT\x10\aB,Z*github.com/Mfon-19/clavis/internal/raftlogb\x06proto3"
 
 var (
 	file_internal_raftlog_command_proto_rawDescOnce sync.Once
@@ -569,15 +716,17 @@ func file_internal_raftlog_command_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_raftlog_command_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_internal_raftlog_command_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_internal_raftlog_command_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_internal_raftlog_command_proto_goTypes = []any{
-	(CommandType)(0),           // 0: raftlog.CommandType
-	(*CreateLeaseCommand)(nil), // 1: raftlog.CreateLeaseCommand
-	(*RenewLeaseCommand)(nil),  // 2: raftlog.RenewLeaseCommand
-	(*AcquireLockCommand)(nil), // 3: raftlog.AcquireLockCommand
-	(*ReleaseLockCommand)(nil), // 4: raftlog.ReleaseLockCommand
-	(*ExpireLeaseCommand)(nil), // 5: raftlog.ExpireLeaseCommand
-	(*CommandWrapper)(nil),     // 6: raftlog.CommandWrapper
+	(CommandType)(0),              // 0: raftlog.CommandType
+	(*CreateLeaseCommand)(nil),    // 1: raftlog.CreateLeaseCommand
+	(*RenewLeaseCommand)(nil),     // 2: raftlog.RenewLeaseCommand
+	(*AcquireLockCommand)(nil),    // 3: raftlog.AcquireLockCommand
+	(*ReleaseLockCommand)(nil),    // 4: raftlog.ReleaseLockCommand
+	(*ExpireLeaseCommand)(nil),    // 5: raftlog.ExpireLeaseCommand
+	(*UpsertEndpointCommand)(nil), // 6: raftlog.UpsertEndpointCommand
+	(*RemoveEndpointCommand)(nil), // 7: raftlog.RemoveEndpointCommand
+	(*CommandWrapper)(nil),        // 8: raftlog.CommandWrapper
 }
 var file_internal_raftlog_command_proto_depIdxs = []int32{
 	0, // 0: raftlog.CommandWrapper.type:type_name -> raftlog.CommandType
@@ -586,11 +735,13 @@ var file_internal_raftlog_command_proto_depIdxs = []int32{
 	3, // 3: raftlog.CommandWrapper.acquire_lock:type_name -> raftlog.AcquireLockCommand
 	4, // 4: raftlog.CommandWrapper.release_lock:type_name -> raftlog.ReleaseLockCommand
 	5, // 5: raftlog.CommandWrapper.expire_lease:type_name -> raftlog.ExpireLeaseCommand
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	6, // 6: raftlog.CommandWrapper.upsert_endpoint:type_name -> raftlog.UpsertEndpointCommand
+	7, // 7: raftlog.CommandWrapper.remove_endpoint:type_name -> raftlog.RemoveEndpointCommand
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_internal_raftlog_command_proto_init() }
@@ -598,12 +749,14 @@ func file_internal_raftlog_command_proto_init() {
 	if File_internal_raftlog_command_proto != nil {
 		return
 	}
-	file_internal_raftlog_command_proto_msgTypes[5].OneofWrappers = []any{
+	file_internal_raftlog_command_proto_msgTypes[7].OneofWrappers = []any{
 		(*CommandWrapper_CreateLease)(nil),
 		(*CommandWrapper_RenewLease)(nil),
 		(*CommandWrapper_AcquireLock)(nil),
 		(*CommandWrapper_ReleaseLock)(nil),
 		(*CommandWrapper_ExpireLease)(nil),
+		(*CommandWrapper_UpsertEndpoint)(nil),
+		(*CommandWrapper_RemoveEndpoint)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -611,7 +764,7 @@ func file_internal_raftlog_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_raftlog_command_proto_rawDesc), len(file_internal_raftlog_command_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

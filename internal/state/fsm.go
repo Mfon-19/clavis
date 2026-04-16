@@ -21,8 +21,9 @@ import (
 type FSM struct {
 	mu sync.RWMutex
 
-	locks  map[string]*domain.Lock  // lock name -> Lock
-	leases map[uint64]*domain.Lease // lease ID -> Lease
+	locks     map[string]*domain.Lock  // lock name -> Lock
+	leases    map[uint64]*domain.Lease // lease ID -> Lease
+	endpoints map[string]string        // node ID -> client-facing gRPC address
 
 	fencingCounter uint64 // global monotonic fencing token counter
 	nextLeaseID    uint64 // next leaseID to assign
@@ -33,6 +34,7 @@ func NewFSM() *FSM {
 	return &FSM{
 		locks:          make(map[string]*domain.Lock),
 		leases:         make(map[uint64]*domain.Lease),
+		endpoints:      make(map[string]string),
 		fencingCounter: 0,
 		nextLeaseID:    1,
 	}
@@ -56,6 +58,10 @@ func (f *FSM) Apply(cmd *raftlog.CommandWrapper) (any, error) {
 		return f.applyReleaseLock(cmd.GetReleaseLock())
 	case raftlog.CommandType_COMMAND_TYPE_EXPIRE_LEASE:
 		return f.applyExpireLease(cmd.GetExpireLease())
+	case raftlog.CommandType_COMMAND_TYPE_UPSERT_ENDPOINT:
+		return f.applyUpsertEndpoint(cmd.GetUpsertEndpoint())
+	case raftlog.CommandType_COMMAND_TYPE_REMOVE_ENDPOINT:
+		return f.applyRemoveEndpoint(cmd.GetRemoveEndpoint())
 	default:
 		return nil, fmt.Errorf("%w: %s", domain.ErrUnknownCommand, cmd.GetType().String())
 	}
@@ -252,6 +258,24 @@ func (f *FSM) applyExpireLease(cmd *raftlog.ExpireLeaseCommand) (any, error) {
 	}, nil
 }
 
+func (f *FSM) applyUpsertEndpoint(cmd *raftlog.UpsertEndpointCommand) (any, error) {
+	if cmd.GetNodeId() == "" || cmd.GetGrpcAddress() == "" {
+		return nil, domain.ErrInvalidClusterNode
+	}
+
+	f.endpoints[cmd.GetNodeId()] = cmd.GetGrpcAddress()
+	return nil, nil
+}
+
+func (f *FSM) applyRemoveEndpoint(cmd *raftlog.RemoveEndpointCommand) (any, error) {
+	if cmd.GetNodeId() == "" {
+		return nil, domain.ErrInvalidClusterNode
+	}
+
+	delete(f.endpoints, cmd.GetNodeId())
+	return nil, nil
+}
+
 func (f *FSM) GetLock(lockName string) (*domain.Lock, bool) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -277,6 +301,14 @@ func (f *FSM) GetLease(leaseID uint64) (*domain.Lease, bool) {
 
 	lease, exists := f.leases[leaseID]
 	return lease, exists
+}
+
+func (f *FSM) GetEndpoint(nodeID string) (string, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	addr, exists := f.endpoints[nodeID]
+	return addr, exists
 }
 
 // Stats holds a snapshot of FSM counters for observability

@@ -116,18 +116,10 @@ func memberViewMatches(node *Node, want []domain.ClusterMember) bool {
 		return false
 	}
 
-	selfID := node.GetNodeID().String()
 	for i := range want {
-		if current[i].NodeID != want[i].NodeID || current[i].RaftAddress != want[i].RaftAddress {
-			return false
-		}
-		if current[i].NodeID == selfID {
-			if current[i].GRPCAddress != want[i].GRPCAddress {
-				return false
-			}
-			continue
-		}
-		if current[i].GRPCAddress != "" && current[i].GRPCAddress != want[i].GRPCAddress {
+		if current[i].NodeID != want[i].NodeID ||
+			current[i].RaftAddress != want[i].RaftAddress ||
+			current[i].GRPCAddress != want[i].GRPCAddress {
 			return false
 		}
 	}
@@ -446,6 +438,16 @@ func TestLeaderFailover(t *testing.T) {
 
 	newLeader := waitForSingleLeader(t, remaining, 10*time.Second)
 	require.NotEqual(t, originalLeader.GetNodeID(), newLeader.GetNodeID(), "leadership should move to a surviving node")
+	newLeaderAddr := newLeader.SelfMember().GRPCAddress
+
+	require.Eventually(t, func() bool {
+		for _, node := range remaining {
+			if node.GetLeaderGRPCAddress() != newLeaderAddr {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 100*time.Millisecond, "remaining nodes did not learn the new leader gRPC address")
 
 	require.Eventually(t, func() bool {
 		lock, ok := newLeader.GetFSM().GetLock("alpha")

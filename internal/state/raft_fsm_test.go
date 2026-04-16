@@ -71,6 +71,8 @@ func TestRaftFSMSnapshot(t *testing.T) {
 	lease1 := mustCreateLease(t, raftFSM.fsm, "client-1", 10*time.Second, createdAt).LeaseID
 	lease2 := mustCreateLease(t, raftFSM.fsm, "client-2", 10*time.Second, createdAt.Add(time.Second)).LeaseID
 	lock := mustAcquireLock(t, raftFSM.fsm, "snap-lock", "client-1", lease1, createdAt.Add(2*time.Second))
+	_, err := raftFSM.fsm.Apply(raftlog.NewUpsertEndpointCmd("node-1", "127.0.0.1:9000"))
+	require.NoError(t, err)
 
 	snapshot, err := raftFSM.Snapshot()
 	require.NoError(t, err)
@@ -78,11 +80,13 @@ func TestRaftFSMSnapshot(t *testing.T) {
 	fsmSnap := snapshot.(*fsmSnapshot)
 	require.Len(t, fsmSnap.Leases, 2)
 	require.Len(t, fsmSnap.Locks, 1)
+	require.Len(t, fsmSnap.Endpoints, 1)
 
 	assert.Equal(t, uint64(1), fsmSnap.FencingCounter)
 	assert.Equal(t, uint64(3), fsmSnap.NextLeaseID)
 	assert.Equal(t, lease2, fsmSnap.Leases[lease2].LeaseID)
 	assert.Equal(t, lock.FencingToken, fsmSnap.Locks["snap-lock"].FencingToken)
+	assert.Equal(t, "127.0.0.1:9000", fsmSnap.Endpoints["node-1"])
 }
 
 // TestRaftFSMRestore verifies that restoring a snapshot recreates the exact FSM
@@ -93,9 +97,11 @@ func TestRaftFSMRestore(t *testing.T) {
 
 	firstLease := mustCreateLease(t, original.fsm, "client-1", 10*time.Second, createdAt).LeaseID
 	firstLock := mustAcquireLock(t, original.fsm, "alpha", "client-1", firstLease, createdAt.Add(time.Second))
+	_, err := original.fsm.Apply(raftlog.NewUpsertEndpointCmd("node-1", "127.0.0.1:9000"))
+	require.NoError(t, err)
 
 	restored := NewRaftFSM()
-	err := restored.Restore(io.NopCloser(bytes.NewReader(snapshotBytes(t, original))))
+	err = restored.Restore(io.NopCloser(bytes.NewReader(snapshotBytes(t, original))))
 	require.NoError(t, err)
 
 	lease, exists := restored.fsm.GetLease(firstLease)
@@ -107,6 +113,10 @@ func TestRaftFSMRestore(t *testing.T) {
 	assert.Equal(t, firstLock.FencingToken, lock.FencingToken)
 
 	assert.Equal(t, stateStats(1, 1, 1), restored.fsm.Stats())
+
+	endpoint, exists := restored.fsm.GetEndpoint("node-1")
+	require.True(t, exists)
+	assert.Equal(t, "127.0.0.1:9000", endpoint)
 
 	secondLease := mustCreateLease(t, restored.fsm, "client-2", 10*time.Second, createdAt.Add(2*time.Second))
 	assert.Equal(t, firstLease+1, secondLease.LeaseID)
@@ -128,6 +138,9 @@ func TestRaftFSMRejectsInvalidSnapshot(t *testing.T) {
 				ExpiresAtUnixNano: 0,
 				TTL:               10 * time.Second,
 			},
+		},
+		Endpoints: map[string]string{
+			"node-1": "127.0.0.1:9000",
 		},
 		FencingCounter: 0,
 		NextLeaseID:    2,

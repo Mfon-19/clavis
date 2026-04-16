@@ -3,14 +3,16 @@ package cluster
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/Mfon-19/clavis/internal/domain"
+	"github.com/Mfon-19/clavis/internal/raftlog"
 	"github.com/hashicorp/raft"
 )
 
-// SelfMember returns this node's local endpoint metadata. Raft membership is
-// still authoritative for who is in the cluster; this struct only describes
-// how clients and admin tools should reach this node over gRPC.
+// SelfMember returns this node's identity and client-facing endpoint metadata.
+// Raft membership is still authoritative for who is in the cluster; this
+// struct only carries the routable addresses associated with this node ID.
 func (n *Node) SelfMember() domain.ClusterMember {
 	return domain.ClusterMember{
 		NodeID:      n.cfg.NodeID.String(),
@@ -19,48 +21,49 @@ func (n *Node) SelfMember() domain.ClusterMember {
 	}
 }
 
-func (n *Node) rememberMember(member domain.ClusterMember) {
-	n.endpointRegistryMu.Lock()
-	defer n.endpointRegistryMu.Unlock()
+// endpointMetadataLoop keeps the leader's own gRPC endpoint present in the
+// replicated endpoint map. This covers the initial bootstrap node and repairs
+// self metadata after restarts or snapshot restores without making endpoint
+// metadata a second source of truth for membership.
+func (n *Node) endpointMetadataLoop() {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
 
-	if n.endpointRegistry == nil {
-		n.endpointRegistry = make(map[string]domain.ClusterMember)
+	for {
+		select {
+		case <-ticker.C:
+			if !n.IsLeader() {
+				continue
+			}
+
+			self := n.SelfMember()
+			if current, ok := n.fsm.GetEndpoint(self.NodeID); ok && current == self.GRPCAddress {
+				continue
+			}
+
+			_, _ = n.Apply(raftlog.NewUpsertEndpointCmd(self.NodeID, self.GRPCAddress))
+		case <-n.stopCh:
+			return
+		}
 	}
-	n.endpointRegistry[member.NodeID] = member
 }
 
-func (n *Node) forgetMember(nodeID string) {
-	n.endpointRegistryMu.Lock()
-	defer n.endpointRegistryMu.Unlock()
-
-	delete(n.endpointRegistry, nodeID)
-}
-
-func (n *Node) knownMember(nodeID string) (domain.ClusterMember, bool) {
-	n.endpointRegistryMu.RLock()
-	defer n.endpointRegistryMu.RUnlock()
-
-	member, ok := n.endpointRegistry[nodeID]
-	return member, ok
-}
-
-func (n *Node) localMembers() []domain.ClusterMember {
-	n.endpointRegistryMu.RLock()
-	defer n.endpointRegistryMu.RUnlock()
-
-	members := make([]domain.ClusterMember, 0, len(n.endpointRegistry))
-	for _, member := range n.endpointRegistry {
-		members = append(members, member)
+func (n *Node) upsertEndpointMetadata(member domain.ClusterMember) error {
+	if _, err := n.Apply(raftlog.NewUpsertEndpointCmd(member.NodeID, member.GRPCAddress)); err != nil {
+		return fmt.Errorf("replicate endpoint metadata: %w", err)
 	}
-	sort.Slice(members, func(i, j int) bool {
-		return members[i].NodeID < members[j].NodeID
-	})
-	return members
+	return nil
 }
 
-// GetLeaderGRPCAddress returns the leader's gRPC address if this node knows it.
-// Because endpoint metadata is local, followers may return an empty string and
-// rely on clients probing their configured seed addresses instead.
+func (n *Node) removeEndpointMetadata(nodeID string) error {
+	if _, err := n.Apply(raftlog.NewRemoveEndpointCmd(nodeID)); err != nil {
+		return fmt.Errorf("remove endpoint metadata: %w", err)
+	}
+	return nil
+}
+
+// GetLeaderGRPCAddress returns the client-facing gRPC address of the current
+// Raft leader using replicated endpoint metadata keyed by leader node ID.
 func (n *Node) GetLeaderGRPCAddress() string {
 	leaderID := n.GetLeaderID()
 	if leaderID == "" {
@@ -71,21 +74,17 @@ func (n *Node) GetLeaderGRPCAddress() string {
 		return n.cfg.GRPCAdvertiseAddr
 	}
 
-	if member, ok := n.knownMember(leaderID); ok {
-		return member.GRPCAddress
-	}
-
-	return ""
+	addr, _ := n.fsm.GetEndpoint(leaderID)
+	return addr
 }
 
-// Members returns the current Raft configuration joined with whatever local
-// endpoint metadata this node knows. Raft remains the source of truth for
-// membership; unknown gRPC addresses are left empty instead of fabricating a
-// second replicated membership system.
+// Members returns the active Raft configuration joined with replicated
+// client-facing endpoint metadata. Raft remains the source of truth for
+// membership; the FSM only stores gRPC addresses keyed by node ID.
 func (n *Node) Members() []domain.ClusterMember {
 	configFuture := n.raft.GetConfiguration()
 	if err := configFuture.Error(); err != nil {
-		return n.localMembers()
+		return []domain.ClusterMember{n.SelfMember()}
 	}
 
 	servers := configFuture.Configuration().Servers
@@ -95,11 +94,13 @@ func (n *Node) Members() []domain.ClusterMember {
 			NodeID:      string(server.ID),
 			RaftAddress: string(server.Address),
 		}
+
 		if server.ID == raft.ServerID(n.cfg.NodeID.String()) {
 			member.GRPCAddress = n.cfg.GRPCAdvertiseAddr
-		} else if known, ok := n.knownMember(member.NodeID); ok {
-			member.GRPCAddress = known.GRPCAddress
+		} else if grpcAddr, ok := n.fsm.GetEndpoint(member.NodeID); ok {
+			member.GRPCAddress = grpcAddr
 		}
+
 		members = append(members, member)
 	}
 
@@ -109,9 +110,9 @@ func (n *Node) Members() []domain.ClusterMember {
 	return members
 }
 
-// AddClusterMember adds a node to the Raft cluster as a voter and remembers
-// its gRPC endpoint locally on the leader. Raft config changes are the only
-// source of truth for actual cluster membership.
+// AddClusterMember adds a node to the Raft cluster as a voter and replicates
+// its client-facing gRPC endpoint metadata so all followers can discover the
+// leader after failover without relying on local seed lists.
 func (n *Node) AddClusterMember(member domain.ClusterMember) error {
 	if !n.IsLeader() {
 		return fmt.Errorf("cannot add cluster member: not leader")
@@ -129,8 +130,7 @@ func (n *Node) AddClusterMember(member domain.ClusterMember) error {
 	for _, server := range configFuture.Configuration().Servers {
 		if string(server.ID) == member.NodeID {
 			if string(server.Address) == member.RaftAddress && server.Suffrage == raft.Voter {
-				n.rememberMember(member)
-				return nil
+				return n.upsertEndpointMetadata(member)
 			}
 			break
 		}
@@ -145,12 +145,12 @@ func (n *Node) AddClusterMember(member domain.ClusterMember) error {
 		return fmt.Errorf("failed to add voter: %w", err)
 	}
 
-	n.rememberMember(member)
-	return nil
+	return n.upsertEndpointMetadata(member)
 }
 
-// RemoveClusterMember removes a node from the Raft cluster and drops any local
-// endpoint metadata this node was caching for it.
+// RemoveClusterMember removes a node from the Raft cluster and deletes any
+// replicated endpoint metadata for it. Stale endpoint entries are harmless
+// because Members() always derives the active set from Raft config first.
 func (n *Node) RemoveClusterMember(nodeID string) error {
 	if !n.IsLeader() {
 		return fmt.Errorf("cannot remove cluster member: not leader")
@@ -177,6 +177,5 @@ func (n *Node) RemoveClusterMember(nodeID string) error {
 		return fmt.Errorf("failed to remove server: %w", err)
 	}
 
-	n.forgetMember(nodeID)
-	return nil
+	return n.removeEndpointMetadata(nodeID)
 }

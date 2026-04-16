@@ -172,6 +172,33 @@ func TestReleaseAndExpiry(t *testing.T) {
 	assert.Equal(t, stateStats(0, 1, 2), fsm.Stats())
 }
 
+// TestEndpointMetadata verifies that endpoint metadata is stored separately
+// from membership and can be upserted and removed deterministically through
+// the Raft-backed FSM.
+func TestEndpointMetadata(t *testing.T) {
+	fsm := NewFSM()
+
+	_, err := fsm.Apply(raftlog.NewUpsertEndpointCmd("node-1", "127.0.0.1:9000"))
+	require.NoError(t, err)
+
+	addr, ok := fsm.GetEndpoint("node-1")
+	require.True(t, ok)
+	assert.Equal(t, "127.0.0.1:9000", addr)
+
+	_, err = fsm.Apply(raftlog.NewUpsertEndpointCmd("node-1", "127.0.0.1:9001"))
+	require.NoError(t, err)
+
+	addr, ok = fsm.GetEndpoint("node-1")
+	require.True(t, ok)
+	assert.Equal(t, "127.0.0.1:9001", addr)
+
+	_, err = fsm.Apply(raftlog.NewRemoveEndpointCmd("node-1"))
+	require.NoError(t, err)
+
+	_, ok = fsm.GetEndpoint("node-1")
+	assert.False(t, ok)
+}
+
 // TestRejectsCommandsWithoutTimestamps verifies that the FSM rejects malformed
 // log entries whose timestamp fields are missing, preventing nondeterministic
 // replay behavior on restore or log replication.
@@ -181,6 +208,7 @@ func TestRejectsMissingTimestamps(t *testing.T) {
 	tests := []struct {
 		name string
 		cmd  *raftlog.CommandWrapper
+		err  string
 	}{
 		{
 			name: "create lease",
@@ -191,6 +219,7 @@ func TestRejectsMissingTimestamps(t *testing.T) {
 					TtlNanos: (20 * time.Millisecond).Nanoseconds(),
 				}},
 			},
+			err: "invalid command timestamp",
 		},
 		{
 			name: "renew lease",
@@ -200,6 +229,7 @@ func TestRejectsMissingTimestamps(t *testing.T) {
 					LeaseId: 1,
 				}},
 			},
+			err: "invalid command timestamp",
 		},
 		{
 			name: "acquire lock",
@@ -211,6 +241,7 @@ func TestRejectsMissingTimestamps(t *testing.T) {
 					LeaseId:  1,
 				}},
 			},
+			err: "invalid command timestamp",
 		},
 		{
 			name: "expire lease",
@@ -220,13 +251,24 @@ func TestRejectsMissingTimestamps(t *testing.T) {
 					LeaseId: 1,
 				}},
 			},
+			err: "invalid command timestamp",
+		},
+		{
+			name: "upsert endpoint",
+			cmd: &raftlog.CommandWrapper{
+				Type: raftlog.CommandType_COMMAND_TYPE_UPSERT_ENDPOINT,
+				Payload: &raftlog.CommandWrapper_UpsertEndpoint{UpsertEndpoint: &raftlog.UpsertEndpointCommand{
+					NodeId: "node-1",
+				}},
+			},
+			err: "invalid cluster node metadata",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := fsm.Apply(tt.cmd)
-			require.EqualError(t, err, "invalid command timestamp")
+			require.EqualError(t, err, tt.err)
 		})
 	}
 }

@@ -77,3 +77,30 @@ func NewExpireLeaseCmd(leaseID uint64, now time.Time) *CommandWrapper {
 		},
 	}
 }
+
+// NewUpsertEndpointCmd builds the Raft log entry that stores a node's
+// client-facing gRPC address in replicated endpoint metadata.
+func NewUpsertEndpointCmd(nodeID, grpcAddress string) *CommandWrapper {
+	return &CommandWrapper{
+		Type: CommandType_COMMAND_TYPE_UPSERT_ENDPOINT,
+		Payload: &CommandWrapper_UpsertEndpoint{
+			UpsertEndpoint: &UpsertEndpointCommand{
+				NodeId:      nodeID,
+				GrpcAddress: grpcAddress,
+			},
+		},
+	}
+}
+
+// NewRemoveEndpointCmd builds the Raft log entry that removes replicated
+// endpoint metadata for a node.
+func NewRemoveEndpointCmd(nodeID string) *CommandWrapper {
+	return &CommandWrapper{
+		Type: CommandType_COMMAND_TYPE_REMOVE_ENDPOINT,
+		Payload: &CommandWrapper_RemoveEndpoint{
+			RemoveEndpoint: &RemoveEndpointCommand{
+				NodeId: nodeID,
+			},
+		},
+	}
+}

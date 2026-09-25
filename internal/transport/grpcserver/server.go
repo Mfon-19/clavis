@@ -1,18 +1,21 @@
 // Package grpcserver implements the LockService gRPC server. It is a pure
 // adapter layer. Each method maps a protobuf request to a service call and
-// translates the response back. Error mapping in centralized in errors.go
+// translates the response back. Error mapping is centralized in toGRPCError
 package grpcserver
 
 import (
 	"context"
 	"errors"
+	"io"
+	"time"
+
 	pb "github.com/Mfon-19/clavis/api/v1"
 	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/Mfon-19/clavis/internal/service"
 	"github.com/Mfon-19/clavis/internal/transport/leaderhint"
+	"github.com/hashicorp/raft"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"io"
 )
 
 type Server struct {
@@ -49,18 +52,7 @@ func (s *Server) CreateLease(ctx context.Context, req *pb.CreateLeaseRequest) (*
 
 	return &pb.CreateLeaseResponse{
 		LeaseId:    resp.LeaseID,
-		TtlSeconds: resp.TTLSeconds,
-	}, nil
-}
-
-func (s *Server) RenewLease(ctx context.Context, req *pb.RenewLeaseRequest) (*pb.RenewLeaseResponse, error) {
-	resp, err := s.service.RenewLease(req.LeaseId)
-	if err != nil {
-		return nil, toGRPCError(err)
-	}
-
-	return &pb.RenewLeaseResponse{
-		TtlSeconds: resp.TTLSeconds,
+		TtlSeconds: int64(resp.TTL / time.Second),
 	}, nil
 }
 
@@ -72,19 +64,16 @@ func (s *Server) AcquireLock(ctx context.Context, req *pb.AcquireLockRequest) (*
 
 	return &pb.AcquireLockResponse{
 		FencingToken:    resp.FencingToken,
-		LeaseTtlSeconds: resp.LeaseTTLSeconds,
+		LeaseTtlSeconds: int64(resp.LeaseTTL / time.Second),
 	}, nil
 }
 
 func (s *Server) ReleaseLock(ctx context.Context, req *pb.ReleaseLockRequest) (*pb.ReleaseLockResponse, error) {
-	resp, err := s.service.ReleaseLock(req.LockName, req.LeaseId)
-	if err != nil {
+	if err := s.service.ReleaseLock(req.LockName, req.LeaseId); err != nil {
 		return nil, toGRPCError(err)
 	}
 
-	return &pb.ReleaseLockResponse{
-		Released: resp.Released,
-	}, nil
+	return &pb.ReleaseLockResponse{Released: true}, nil
 }
 
 // Heartbeat implements a bidirectional streaming RPC for lease keepalive.
@@ -100,14 +89,14 @@ func (s *Server) Heartbeat(stream pb.LockService_HeartbeatServer) error {
 			return err
 		}
 
-		resp, err := s.service.Heartbeat(req.LeaseId)
+		resp, err := s.service.RenewLease(req.LeaseId)
 		if err != nil {
 			return toGRPCError(err)
 		}
 
 		if err := stream.Send(&pb.HeartbeatResponse{
 			LeaseId:    req.LeaseId,
-			TtlSeconds: resp.TTLSeconds,
+			TtlSeconds: int64(resp.TTL / time.Second),
 		}); err != nil {
 			return err
 		}
@@ -122,9 +111,7 @@ func (s *Server) GetStatus(ctx context.Context, req *pb.GetStatusRequest) (*pb.G
 	return &pb.GetStatusResponse{
 		NodeId:            resp.NodeID,
 		IsLeader:          resp.IsLeader,
-		LeaderAddress:     resp.LeaderAddress,
 		LeaderGrpcAddress: resp.LeaderGRPCAddress,
-		ClusterSize:       resp.ClusterSize,
 		State:             resp.State,
 		GrpcAddress:       resp.GRPCAddress,
 		Members:           toProtoMembers(resp.Members),
@@ -137,7 +124,7 @@ func (s *Server) GetStatus(ctx context.Context, req *pb.GetStatusRequest) (*pb.G
 }
 
 func (s *Server) JoinNode(ctx context.Context, req *pb.JoinNodeRequest) (*pb.JoinNodeResponse, error) {
-	resp, err := s.service.JoinNode(domain.ClusterMember{
+	leaderAddr, err := s.service.JoinNode(domain.ClusterMember{
 		NodeID:      req.NodeId,
 		RaftAddress: req.RaftAddress,
 		GRPCAddress: req.GrpcAddress,
@@ -147,18 +134,17 @@ func (s *Server) JoinNode(ctx context.Context, req *pb.JoinNodeRequest) (*pb.Joi
 	}
 
 	return &pb.JoinNodeResponse{
-		Joined:            resp.Joined,
-		LeaderGrpcAddress: resp.LeaderGRPCAddress,
+		Joined:            true,
+		LeaderGrpcAddress: leaderAddr,
 	}, nil
 }
 
 func (s *Server) RemoveNode(ctx context.Context, req *pb.RemoveNodeRequest) (*pb.RemoveNodeResponse, error) {
-	resp, err := s.service.RemoveNode(req.NodeId)
-	if err != nil {
+	if err := s.service.RemoveNode(req.NodeId); err != nil {
 		return nil, toGRPCError(err)
 	}
 
-	return &pb.RemoveNodeResponse{Removed: resp.Removed}, nil
+	return &pb.RemoveNodeResponse{Removed: true}, nil
 }
 
 // toGRPCError maps domain and service errors to gRPC status codes.
@@ -179,17 +165,36 @@ func toGRPCError(err error) error {
 		return leaderhint.Error(notLeaderErr.LeaderGRPCAddress)
 	}
 
-	switch err {
-	case domain.ErrLeaseNotFound, domain.ErrLockNotFound, domain.ErrNodeNotFound:
+	if errors.Is(err, raft.ErrNotLeader) ||
+		errors.Is(err, raft.ErrLeadershipLost) ||
+		errors.Is(err, raft.ErrLeadershipTransferInProgress) ||
+		errors.Is(err, raft.ErrRaftShutdown) {
+		// A leadership transition can race with the service layer's initial
+		// IsLeader check. Surface the resulting Raft error as retryable so the
+		// SDK performs discovery instead of treating it as an internal failure.
+		return status.Error(codes.Unavailable, err.Error())
+	}
+
+	switch {
+	case errors.Is(err, domain.ErrLockAlreadyHeld):
+		// Distinct from other precondition failures so clients can tell "someone
+		// else holds this lock" apart from "your lease is gone" by code alone.
+		return status.Error(codes.AlreadyExists, err.Error())
+
+	case errors.Is(err, domain.ErrLeaseNotFound),
+		errors.Is(err, domain.ErrLockNotFound),
+		errors.Is(err, domain.ErrNodeNotFound):
 		return status.Error(codes.NotFound, err.Error())
 
-	case domain.ErrLeaseExpired, domain.ErrLockAlreadyHeld, domain.ErrStaleToken:
+	case errors.Is(err, domain.ErrLeaseExpired):
 		return status.Error(codes.FailedPrecondition, err.Error())
 
-	case domain.ErrInvalidLeaseTTL, domain.ErrInvalidTimestamp, domain.ErrInvalidClusterNode:
+	case errors.Is(err, domain.ErrInvalidLeaseTTL),
+		errors.Is(err, domain.ErrInvalidTimestamp),
+		errors.Is(err, domain.ErrInvalidClusterNode):
 		return status.Error(codes.InvalidArgument, err.Error())
 
-	case domain.ErrNotLockOwner:
+	case errors.Is(err, domain.ErrNotLockOwner):
 		return status.Error(codes.PermissionDenied, err.Error())
 
 	default:

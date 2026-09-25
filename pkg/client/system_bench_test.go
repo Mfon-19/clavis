@@ -4,20 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	pb "github.com/Mfon-19/clavis/api/v1"
 	"github.com/Mfon-19/clavis/internal/app"
 	clientpkg "github.com/Mfon-19/clavis/pkg/client"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"io"
-	"net"
-	"path/filepath"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"testing"
-	"time"
 )
 
 // These are system benchmarks. Each benchmark runs against a real
@@ -168,7 +168,7 @@ func (c *benchmarkCluster) waitForClusterSize(size int, timeout time.Duration) e
 			if err != nil {
 				continue
 			}
-			if int(resp.GetClusterSize()) == size {
+			if len(resp.GetMembers()) == size {
 				return nil
 			}
 		}
@@ -216,10 +216,7 @@ func acquireUntilSuccess(ctx context.Context, client *clientpkg.Client, lockName
 		if err == nil {
 			return lock, nil
 		}
-		if errors.Is(err, clientpkg.ErrLeaseUnavailable) {
-			return nil, err
-		}
-		if !strings.Contains(err.Error(), "lock is already held") {
+		if !errors.Is(err, clientpkg.ErrLockHeld) {
 			return nil, err
 		}
 

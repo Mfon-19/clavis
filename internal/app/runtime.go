@@ -98,8 +98,26 @@ func (r *Runtime) Start(_ context.Context) <-chan error {
 // Stop gracefully shuts down in order: gRPC -> Raft. Idempotent
 func (r *Runtime) Stop(ctx context.Context) error {
 	r.stopOnce.Do(func() {
-		r.grpcServer.GracefulStop()
-		r.stopErr = r.node.Shutdown()
+		gracefulDone := make(chan struct{})
+		go func() {
+			r.grpcServer.GracefulStop()
+			close(gracefulDone)
+		}()
+
+		select {
+		case <-gracefulDone:
+		case <-ctx.Done():
+			// Long-lived heartbeat streams can otherwise keep GracefulStop
+			// blocked forever. Force-close them when the caller's deadline
+			// expires, then continue shutting down Raft and storage.
+			r.grpcServer.Stop()
+			<-gracefulDone
+			r.stopErr = ctx.Err()
+		}
+
+		if err := r.node.Shutdown(); err != nil && r.stopErr == nil {
+			r.stopErr = err
+		}
 	})
 	return r.stopErr
 }

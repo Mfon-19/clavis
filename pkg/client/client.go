@@ -15,14 +15,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	pb "github.com/Mfon-19/clavis/api/v1"
 	"time"
+
+	pb "github.com/Mfon-19/clavis/api/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ErrLeaseUnavailable indicates the heartbeat loop has failed persistently
 // and the lease health is unknown. All subsequent Acquire/Release calls will
 // fail until the client is restarted
 var ErrLeaseUnavailable = errors.New("lease health is unknown. reconnect required")
+
+// ErrLockHeld indicates the lock is currently held by another lease. It is
+// an expected outcome under contention, not a failure of the client.
+var ErrLockHeld = errors.New("lock is held by another lease")
 
 // Client is the primary entry point for interacting with a clavis cluster.
 // Create one via [NewClient] or [NewClientWithSeeds], call [Client.Start] to
@@ -55,21 +62,27 @@ func NewClientWithSeeds(addrs []string, ownerID string) (*Client, error) {
 // leader, and starts a background goroutine that sends heartbeats at TTL/3
 // intervals to keep the lease alive
 func (c *Client) Start(ctx context.Context, ttl time.Duration) error {
-	if ttl <= 0 {
-		return fmt.Errorf("ttl must be greater than 0")
+	if ttl < time.Second {
+		return fmt.Errorf("ttl must be at least 1 second")
 	}
 
-	resp, err := callWithFailover(c, ctx, func(client pb.LockServiceClient) (*pb.CreateLeaseResponse, error) {
-		return client.CreateLease(ctx, &pb.CreateLeaseRequest{
+	ttlSeconds := int64(ttl / time.Second)
+	resp, err := callWithFailover(c, ctx, func(attemptCtx context.Context, client pb.LockServiceClient) (*pb.CreateLeaseResponse, error) {
+		return client.CreateLease(attemptCtx, &pb.CreateLeaseRequest{
 			OwnerId:    c.ownerID,
-			TtlSeconds: int64(ttl.Seconds()),
+			TtlSeconds: ttlSeconds,
 		})
 	})
 	if err != nil {
 		return fmt.Errorf("create lease: %w", err)
 	}
 
-	c.session.startLease(resp.LeaseId, ttl)
+	if resp.TtlSeconds <= 0 {
+		return fmt.Errorf("create lease: server returned invalid TTL %d", resp.TtlSeconds)
+	}
+
+	leaseTTL := time.Duration(resp.TtlSeconds) * time.Second
+	c.session.startLease(resp.LeaseId, leaseTTL)
 
 	currentAddr := c.resolver.current()
 	if currentAddr == "" {
@@ -81,6 +94,7 @@ func (c *Client) Start(ctx context.Context, ttl time.Duration) error {
 
 	sessionCtx := c.session.context()
 	if err = c.openHeartbeatStream(sessionCtx, currentAddr); err != nil {
+		c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
 		return err
 	}
 
@@ -91,21 +105,24 @@ func (c *Client) Start(ctx context.Context, ttl time.Duration) error {
 // Acquire acquires a named distributed lock and returns a [Lock] handle.
 // The lock is bound to the client's active lease; it will be auto-released
 // if the lease expires. Use Lock.Token() for fencing.
-// Use [Client.WaitAcquire] if you want to wait for a busy lock instead of
-// receiving an immediate failed-precondition error.
+// If another lease holds the lock, the error wraps [ErrLockHeld]. Use
+// [Client.WaitAcquire] to wait for a busy lock instead.
 func (c *Client) Acquire(ctx context.Context, lockName string) (*Lock, error) {
 	leaseID, err := c.session.activeLeaseID()
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := callWithFailover(c, ctx, func(client pb.LockServiceClient) (*pb.AcquireLockResponse, error) {
-		return client.AcquireLock(ctx, &pb.AcquireLockRequest{
+	resp, err := callWithFailover(c, ctx, func(attemptCtx context.Context, client pb.LockServiceClient) (*pb.AcquireLockResponse, error) {
+		return client.AcquireLock(attemptCtx, &pb.AcquireLockRequest{
 			LockName: lockName,
 			OwnerId:  c.ownerID,
 			LeaseId:  leaseID,
 		})
 	})
+	if status.Code(err) == codes.AlreadyExists {
+		return nil, fmt.Errorf("acquire lock %q: %w", lockName, ErrLockHeld)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("acquire lock: %w", err)
 	}
@@ -124,8 +141,8 @@ func (c *Client) Release(ctx context.Context, lockName string) error {
 		return err
 	}
 
-	_, err = callWithFailover(c, ctx, func(client pb.LockServiceClient) (*pb.ReleaseLockResponse, error) {
-		return client.ReleaseLock(ctx, &pb.ReleaseLockRequest{
+	_, err = callWithFailover(c, ctx, func(attemptCtx context.Context, client pb.LockServiceClient) (*pb.ReleaseLockResponse, error) {
+		return client.ReleaseLock(attemptCtx, &pb.ReleaseLockRequest{
 			LockName: lockName,
 			LeaseId:  leaseID,
 		})
@@ -139,8 +156,8 @@ func (c *Client) Release(ctx context.Context, lockName string) error {
 
 // Status queries the cluster for health, leader info, and FSM stats.
 func (c *Client) Status(ctx context.Context) (*pb.GetStatusResponse, error) {
-	resp, err := callWithFailover(c, ctx, func(client pb.LockServiceClient) (*pb.GetStatusResponse, error) {
-		return client.GetStatus(ctx, &pb.GetStatusRequest{})
+	resp, err := callWithFailover(c, ctx, func(attemptCtx context.Context, client pb.LockServiceClient) (*pb.GetStatusResponse, error) {
+		return client.GetStatus(attemptCtx, &pb.GetStatusRequest{})
 	})
 	if err != nil {
 		return nil, err

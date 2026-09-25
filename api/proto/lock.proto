@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package clavis.v1;
 
-option go_package = "github.com/Mfon-19/clavis";
+option go_package = "github.com/Mfon-19/clavis/api/v1;v1";
 
 
 // LockService is the data plane. Application workers use it to create a lease,
@@ -10,7 +10,6 @@ option go_package = "github.com/Mfon-19/clavis";
 // status. Mutating RPCs must be served by the current Raft leader.
 service LockService {
   rpc CreateLease(CreateLeaseRequest) returns (CreateLeaseResponse);
-  rpc RenewLease(RenewLeaseRequest) returns (RenewLeaseResponse);
   rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
   rpc AcquireLock(AcquireLockRequest) returns (AcquireLockResponse);
   rpc ReleaseLock(ReleaseLockRequest) returns (ReleaseLockResponse);
@@ -36,14 +35,6 @@ message CreateLeaseResponse {
   // lease_id is the server-assigned session identifier used by later RPCs.
   uint64 lease_id = 1;
   int64 ttl_seconds = 2;
-}
-
-message RenewLeaseRequest {
-  uint64 lease_id = 1;
-}
-
-message RenewLeaseResponse {
-  int64 ttl_seconds = 1;
 }
 
 message HeartbeatRequest {
@@ -82,10 +73,10 @@ message GetStatusRequest {
 }
 
 message GetStatusResponse {
+  reserved 3, 4;
+  reserved "leader_address", "cluster_size";
   string node_id = 1;           // This node's ID
   bool is_leader = 2;           // Is this node the leader?
-  string leader_address = 3;    // Current leader address
-  int32 cluster_size = 4;       // Number of nodes in cluster
   string state = 5;             // Raft state: "leader", "follower", "candidate"
   Stats stats = 6;              // FSM statistics
   string grpc_address = 7;      // This node's gRPC address
@@ -96,8 +87,9 @@ message GetStatusResponse {
 // LeaderHint is attached to "not leader" gRPC errors as structured status
 // details so clients do not need to parse free-form error messages.
 message LeaderHint {
+  reserved 2;
+  reserved "raft_address";
   string grpc_address = 1;
-  string raft_address = 2;
 }
 
 message Stats {

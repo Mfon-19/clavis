@@ -25,7 +25,8 @@ type leaseSession struct {
 	leaseTTL time.Duration
 	leaseErr error
 
-	heartbeat pb.LockService_HeartbeatClient
+	heartbeat       pb.LockService_HeartbeatClient
+	heartbeatCancel context.CancelFunc
 
 	runCtx    context.Context
 	runCancel context.CancelFunc
@@ -84,15 +85,37 @@ func (s *leaseSession) heartbeatState() (uint64, pb.LockService_HeartbeatClient)
 	return s.leaseID, s.heartbeat
 }
 
-// swapHeartbeat atomically replaces the heartbeat connection and stream,
-// returning the old ones so the caller can close them outside the lock.
-func (s *leaseSession) swapHeartbeat(stream pb.LockService_HeartbeatClient) pb.LockService_HeartbeatClient {
+// swapHeartbeat atomically replaces the heartbeat stream and its cancellation
+// function, returning the old cancellation function for use outside the lock.
+func (s *leaseSession) swapHeartbeat(
+	stream pb.LockService_HeartbeatClient,
+	cancel context.CancelFunc,
+) context.CancelFunc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	oldStream := s.heartbeat
+	oldCancel := s.heartbeatCancel
 	s.heartbeat = stream
-	return oldStream
+	s.heartbeatCancel = cancel
+	return oldCancel
+}
+
+// closeHeartbeat cancels stream if it is still the session's current stream.
+// Cancellation is what guarantees a blocked Send or Recv is interrupted.
+func (s *leaseSession) closeHeartbeat(stream pb.LockService_HeartbeatClient) {
+	s.mu.Lock()
+	if s.heartbeat != stream {
+		s.mu.Unlock()
+		return
+	}
+	cancel := s.heartbeatCancel
+	s.heartbeat = nil
+	s.heartbeatCancel = nil
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // invalidate marks the session as unhealthy, recording the cause and tearing
@@ -100,14 +123,16 @@ func (s *leaseSession) swapHeartbeat(stream pb.LockService_HeartbeatClient) pb.L
 // with ErrLeaseUnavailable until a new client is created.
 func (s *leaseSession) invalidate(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.leaseErr == nil {
 		s.leaseErr = err
 	}
-	if s.heartbeat != nil {
-		_ = s.heartbeat.CloseSend()
-		s.heartbeat = nil
+	cancel := s.heartbeatCancel
+	s.heartbeat = nil
+	s.heartbeatCancel = nil
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -125,12 +150,13 @@ func (s *leaseSession) stop() error {
 	})
 
 	s.mu.Lock()
-	stream := s.heartbeat
+	cancel := s.heartbeatCancel
 	s.heartbeat = nil
+	s.heartbeatCancel = nil
 	s.mu.Unlock()
 
-	if stream != nil {
-		_ = stream.CloseSend()
+	if cancel != nil {
+		cancel()
 	}
 
 	return nil
@@ -145,16 +171,18 @@ func (c *Client) openHeartbeatStream(ctx context.Context, addr string) error {
 	}
 
 	client := pb.NewLockServiceClient(conn)
-	stream, err := client.Heartbeat(ctx)
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	stream, err := client.Heartbeat(streamCtx)
 	if err != nil {
+		streamCancel()
 		return fmt.Errorf("heartbeat stream: %w", err)
 	}
 
-	oldStream := c.session.swapHeartbeat(stream)
+	oldCancel := c.session.swapHeartbeat(stream, streamCancel)
 	c.resolver.rememberAddr(addr)
 
-	if oldStream != nil {
-		_ = oldStream.CloseSend()
+	if oldCancel != nil {
+		oldCancel()
 	}
 
 	return nil
@@ -169,7 +197,7 @@ func (c *Client) reconnectHeartbeat(ctx context.Context) error {
 		return err
 	}
 
-	if err := c.openHeartbeatStream(ctx, leaderAddr); err != nil {
+	if err := c.openHeartbeatStream(c.session.context(), leaderAddr); err != nil {
 		return err
 	}
 
@@ -177,60 +205,101 @@ func (c *Client) reconnectHeartbeat(ctx context.Context) error {
 	return nil
 }
 
-// heartbeatLoop runs in a background goroutine, sending heartbeat RPCs at
-// TTL/3 intervals to keep the lease alive. On stream failure it attempts one
-// reconnect; two consecutive failures invalidate the session, causing all
-// subsequent lock operations to fail with ErrLeaseUnavailable.
-func (c *Client) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(c.session.ttl() / 3)
-	defer ticker.Stop()
+// heartbeatExchange sends one renewal and waits for its acknowledgement. The
+// stream RPC itself has a session-long context, so enforce a per-exchange
+// deadline here and cancel the stream if Send or Recv stalls.
+func (c *Client) heartbeatExchange(
+	ctx context.Context,
+	leaseID uint64,
+	stream pb.LockService_HeartbeatClient,
+	timeout time.Duration,
+) error {
+	result := make(chan error, 1)
+	go func() {
+		if err := stream.Send(&pb.HeartbeatRequest{LeaseId: leaseID}); err != nil {
+			result <- err
+			return
+		}
 
-	var failureCount int
+		resp, err := stream.Recv()
+		if err == nil && resp.GetLeaseId() != leaseID {
+			err = fmt.Errorf("heartbeat response lease mismatch: got %d, want %d", resp.GetLeaseId(), leaseID)
+		}
+		result <- err
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			c.session.closeHeartbeat(stream)
+		}
+		return err
+	case <-timer.C:
+		c.session.closeHeartbeat(stream)
+		return fmt.Errorf("heartbeat acknowledgement timed out after %s", timeout)
+	case <-ctx.Done():
+		c.session.closeHeartbeat(stream)
+		return ctx.Err()
+	}
+}
+
+func (c *Client) heartbeatAttempt(ctx context.Context, timeout time.Duration) error {
+	leaseID, stream := c.session.heartbeatState()
+	if stream == nil {
+		if err := c.reconnectHeartbeat(ctx); err != nil {
+			return err
+		}
+		leaseID, stream = c.session.heartbeatState()
+	}
+	if stream == nil {
+		return fmt.Errorf("heartbeat stream unavailable")
+	}
+
+	return c.heartbeatExchange(ctx, leaseID, stream, timeout)
+}
+
+func (c *Client) heartbeatAttemptWithin(ctx context.Context, timeout time.Duration) error {
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return c.heartbeatAttempt(attemptCtx, timeout)
+}
+
+// heartbeatLoop renews at TTL/3 intervals. Each exchange must finish within
+// another TTL/3, leaving time for one immediate reconnect-and-renew attempt.
+// If both attempts fail, the session is invalidated no later than its TTL.
+func (c *Client) heartbeatLoop(ctx context.Context) {
+	interval := c.session.ttl() / 3
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			leaseID, stream := c.session.heartbeatState()
-
-			if stream == nil {
-				if err := c.reconnectHeartbeat(ctx); err != nil {
-					failureCount++
-					log.Printf("[WARNING] Heartbeat reconnect failed (attempt %d): %v", failureCount, err)
-					if failureCount >= 2 {
-						log.Printf("[CRITICAL] Lease %d may expire soon - heartbeat unavailable", leaseID)
-						c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
-						return
-					}
-				}
+			err := c.heartbeatAttemptWithin(ctx, interval)
+			if err == nil {
 				continue
 			}
+			if ctx.Err() != nil {
+				return
+			}
 
-			if err := stream.Send(&pb.HeartbeatRequest{LeaseId: leaseID}); err != nil {
-				failureCount++
-				log.Printf("[WARNING] Heartbeat send failed (attempt %d): %v", failureCount, err)
-				if err := c.reconnectHeartbeat(ctx); err != nil && failureCount >= 2 {
-					log.Printf("[CRITICAL] Lease %d may expire soon - heartbeat failing", leaseID)
-					c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
-					return
-				}
+			log.Printf("[WARNING] Heartbeat failed (attempt 1): %v", err)
+			err = c.heartbeatAttemptWithin(ctx, interval)
+			if err == nil {
+				log.Printf("[INFO] Heartbeat recovered after reconnect")
 				continue
 			}
-
-			if _, err := stream.Recv(); err != nil {
-				failureCount++
-				log.Printf("[WARNING] Heartbeat recv failed (attempt %d): %v", failureCount, err)
-				if err := c.reconnectHeartbeat(ctx); err != nil && failureCount >= 2 {
-					log.Printf("[CRITICAL] Lease %d may expire soon - heartbeat failing", leaseID)
-					c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
-					return
-				}
-				continue
+			if ctx.Err() != nil {
+				return
 			}
 
-			if failureCount > 0 {
-				log.Printf("[INFO] Heartbeat recovered after %d failures", failureCount)
-				failureCount = 0
-			}
+			leaseID, _ := c.session.heartbeatState()
+			log.Printf("[CRITICAL] Lease %d heartbeat failed twice: %v", leaseID, err)
+			c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
+			return
 
 		case <-ctx.Done():
 			return

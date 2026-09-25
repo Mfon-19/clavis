@@ -4,7 +4,7 @@ package domain
 // configuration remains the source of truth for cluster membership; this struct
 // only carries endpoint metadata used for client and admin RPCs.
 type ClusterMember struct {
-	NodeID      string `json:"node_id"`
-	RaftAddress string `json:"raft_address"`
-	GRPCAddress string `json:"grpc_address"`
+	NodeID      string
+	RaftAddress string
+	GRPCAddress string
 }

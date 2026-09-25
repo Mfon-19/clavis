@@ -66,7 +66,7 @@ Leases and locks are separate concepts. A **lease** is a time-bounded session ke
 
 **No availability during quorum loss.** Writes fail or stall until a new leader is elected. This is expected for a CP system.
 
-**Endpoint discovery is best-effort.** Raft configuration is the authoritative cluster membership. Client-facing gRPC endpoint metadata is local knowledge, not replicated state. Clients keep a seed list and probe when needed.
+**Expiry is delayed after failover.** A newly elected leader will not expire any lease until it has been leader for at least that lease's TTL. This gives clients time to reconnect, but a crashed client's locks are held for up to one extra TTL after a failover.
 
 ## Getting Started
 
@@ -179,7 +179,6 @@ Clavis exposes two gRPC services defined in [`api/proto/lock.proto`](api/proto/l
 | RPC | Purpose |
 |-----|---------|
 | `CreateLease` | Create a time-bounded session for a given owner |
-| `RenewLease` | Extend a lease by its original TTL |
 | `Heartbeat` | Bidirectional stream that keeps a lease alive |
 | `AcquireLock` | Acquire a named lock, returns a fencing token |
 | `ReleaseLock` | Release a lock held by a given lease |

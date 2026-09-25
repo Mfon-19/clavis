@@ -1,11 +1,13 @@
 package service
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/Mfon-19/clavis/internal/cluster"
 	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/Mfon-19/clavis/internal/raftlog"
 	"github.com/Mfon-19/clavis/internal/state"
-	"time"
 )
 
 // Service orchestrates business operations between the transport layer and
@@ -20,48 +22,47 @@ func NewService(node *cluster.Node) *Service {
 	return &Service{node: node}
 }
 
-type CreateLeaseResult struct {
-	LeaseID    uint64
-	TTLSeconds int64
-}
-
-type RenewLeaseResult struct {
-	TTLSeconds int64
-}
-
-type AcquireLockResult struct {
-	FencingToken    uint64
-	LeaseTTLSeconds int64
-}
-
-type ReleaseLockResult struct {
-	Released bool
-}
-
-type LockStateResult struct {
-	Held         bool
-	FencingToken uint64
-}
-
+// StatusResult aggregates this node's view of the cluster for GetStatus.
 type StatusResult struct {
 	NodeID            string
 	IsLeader          bool
-	LeaderAddress     string
 	LeaderGRPCAddress string
-	ClusterSize       int32
 	State             string
 	GRPCAddress       string
 	Members           []domain.ClusterMember
 	Stats             state.Stats
 }
 
-type JoinNodeResult struct {
-	Joined            bool
-	LeaderGRPCAddress string
+// as converts the untyped FSM response from a Raft apply into the concrete
+// response type the command is known to produce.
+func as[T any](result any, err error) (T, error) {
+	var zero T
+	if err != nil {
+		return zero, err
+	}
+	typed, ok := result.(T)
+	if !ok {
+		return zero, fmt.Errorf("unexpected FSM response type %T", result)
+	}
+	return typed, nil
 }
 
-type RemoveNodeResult struct {
-	Removed bool
+const maxLeaseTTLSeconds int64 = (1<<63 - 1) / int64(time.Second)
+
+func leaseTTLDuration(ttlSeconds int64, now time.Time) (time.Duration, error) {
+	switch {
+	case ttlSeconds <= 0:
+		return 0, &InvalidArgumentError{Message: "ttl_seconds must be greater than 0"}
+	case ttlSeconds > maxLeaseTTLSeconds:
+		return 0, &InvalidArgumentError{Message: "ttl_seconds exceeds the maximum supported duration"}
+	}
+
+	ttl := time.Duration(ttlSeconds) * time.Second
+	maxExpiryNanos := int64(1<<63-1) - now.UnixNano()
+	if maxExpiryNanos <= 0 || ttl > time.Duration(maxExpiryNanos) {
+		return 0, &InvalidArgumentError{Message: "ttl_seconds exceeds the maximum supported expiry"}
+	}
+	return ttl, nil
 }
 
 // ensureLeader returns nil if this node is the Raft leader, or a
@@ -79,107 +80,58 @@ func (s *Service) ensureLeader() error {
 // CreateLease creates a new time-bounded lease for the given owner. The service
 // attaches the proposal timestamp before submitting the command to Raft so the
 // FSM does not need to read local wall-clock time during replay
-func (s *Service) CreateLease(ownerID string, ttlSeconds int64) (*CreateLeaseResult, error) {
+func (s *Service) CreateLease(ownerID string, ttlSeconds int64) (state.CreateLeaseResponse, error) {
 	if err := s.ensureLeader(); err != nil {
-		return nil, err
+		return state.CreateLeaseResponse{}, err
 	}
 	if ownerID == "" {
-		return nil, &InvalidArgumentError{Message: "owner_id required"}
-	}
-	if ttlSeconds <= 0 {
-		return nil, &InvalidArgumentError{Message: "ttl_seconds must be greater than 0"}
+		return state.CreateLeaseResponse{}, &InvalidArgumentError{Message: "owner_id required"}
 	}
 
-	resp, err := s.node.Apply(raftlog.NewCreateLeaseCmd(ownerID, time.Duration(ttlSeconds)*time.Second, time.Now().UTC()))
+	now := s.node.Now()
+	ttl, err := leaseTTLDuration(ttlSeconds, now)
 	if err != nil {
-		return nil, err
+		return state.CreateLeaseResponse{}, err
 	}
 
-	lease := resp.(state.CreateLeaseResponse)
-	return &CreateLeaseResult{
-		LeaseID:    lease.LeaseID,
-		TTLSeconds: ttlSeconds,
-	}, nil
+	return as[state.CreateLeaseResponse](s.node.Apply(raftlog.NewCreateLeaseCmd(ownerID, ttl, now)))
 }
 
 // RenewLease extends a lease's expiry by its original TTL. It uses
 // Node.ApplyRenewLease instead of Node.Apply directly so the leader can track
 // the renewal as pending while Raft replication is in flight
-func (s *Service) RenewLease(leaseID uint64) (*RenewLeaseResult, error) {
+func (s *Service) RenewLease(leaseID uint64) (state.RenewLeaseResponse, error) {
 	if err := s.ensureLeader(); err != nil {
-		return nil, err
+		return state.RenewLeaseResponse{}, err
 	}
 
-	result, err := s.node.ApplyRenewLease(leaseID, time.Now().UTC())
-	if err != nil {
-		return nil, err
-	}
-
-	resp := result.(state.RenewLeaseResponse)
-	return &RenewLeaseResult{
-		TTLSeconds: int64(resp.TTL.Seconds()),
-	}, nil
-}
-
-// Heartbeat renews a lease from the bidirectional streaming Heartbeat RPC. It
-// intentionally shares the same Raft-backed path as unary RenewLease
-func (s *Service) Heartbeat(leaseID uint64) (*RenewLeaseResult, error) {
-	return s.RenewLease(leaseID)
+	return as[state.RenewLeaseResponse](s.node.ApplyRenewLease(leaseID, s.node.Now()))
 }
 
 // AcquireLock acquires a named distributed lock bound to the given lease.
 // Returns a monotonic fencing token for split-brain protection
-func (s *Service) AcquireLock(lockName, ownerID string, leaseID uint64) (*AcquireLockResult, error) {
+func (s *Service) AcquireLock(lockName, ownerID string, leaseID uint64) (state.AcquireLockResponse, error) {
 	if err := s.ensureLeader(); err != nil {
-		return nil, err
+		return state.AcquireLockResponse{}, err
 	}
 	if ownerID == "" || lockName == "" {
-		return nil, &InvalidArgumentError{Message: "owner_id, lock_name and lease_id are required"}
+		return state.AcquireLockResponse{}, &InvalidArgumentError{Message: "owner_id, lock_name and lease_id are required"}
 	}
 
-	result, err := s.node.Apply(raftlog.NewAcquireLockCmd(lockName, ownerID, leaseID, time.Now().UTC()))
-	if err != nil {
-		return nil, err
-	}
-
-	resp := result.(state.AcquireLockResponse)
-	return &AcquireLockResult{
-		FencingToken:    resp.FencingToken,
-		LeaseTTLSeconds: int64(resp.LeaseTTL.Seconds()),
-	}, nil
+	return as[state.AcquireLockResponse](s.node.Apply(raftlog.NewAcquireLockCmd(lockName, ownerID, leaseID, s.node.Now())))
 }
 
 // ReleaseLock releases a held lock. Only the lease that acquired it may release it.
-func (s *Service) ReleaseLock(lockName string, leaseID uint64) (*ReleaseLockResult, error) {
+func (s *Service) ReleaseLock(lockName string, leaseID uint64) error {
 	if err := s.ensureLeader(); err != nil {
-		return nil, err
+		return err
 	}
 	if lockName == "" {
-		return nil, &InvalidArgumentError{Message: "lock_name required"}
+		return &InvalidArgumentError{Message: "lock_name required"}
 	}
 
-	result, err := s.node.Apply(raftlog.NewReleaseLockCmd(lockName, leaseID))
-	if err != nil {
-		return nil, err
-	}
-
-	resp := result.(state.ReleaseLockResponse)
-	return &ReleaseLockResult{Released: resp.Released}, nil
-}
-
-func (s *Service) LockState(lockName string) (*LockStateResult, error) {
-	if err := s.ensureLeader(); err != nil {
-		return nil, err
-	}
-	if lockName == "" {
-		return nil, &InvalidArgumentError{Message: "lock_name required"}
-	}
-
-	held, token := s.node.LockState(lockName)
-	return &LockStateResult{
-		Held:         held,
-		FencingToken: token,
-	}, nil
+	_, err := s.node.Apply(raftlog.NewReleaseLockCmd(lockName, leaseID))
+	return err
 }
 
 // Status returns cluster health, leader info, shared endpoint metadata, and
@@ -191,9 +143,7 @@ func (s *Service) Status() *StatusResult {
 	return &StatusResult{
 		NodeID:            s.node.GetNodeID().String(),
 		IsLeader:          s.node.IsLeader(),
-		LeaderAddress:     s.node.GetLeader(),
 		LeaderGRPCAddress: s.node.GetLeaderGRPCAddress(),
-		ClusterSize:       int32(s.node.GetClusterSize()),
 		State:             s.node.GetState().String(),
 		GRPCAddress:       self.GRPCAddress,
 		Members:           s.node.Members(),
@@ -201,34 +151,28 @@ func (s *Service) Status() *StatusResult {
 	}
 }
 
-// JoinNode adds a new node to the Raft cluster as a voter.
-func (s *Service) JoinNode(member domain.ClusterMember) (*JoinNodeResult, error) {
+// JoinNode adds a new node to the Raft cluster as a voter and returns the
+// leader's client-facing gRPC address.
+func (s *Service) JoinNode(member domain.ClusterMember) (string, error) {
 	if err := s.ensureLeader(); err != nil {
-		return nil, err
+		return "", err
 	}
 
 	if err := s.node.AddClusterMember(member); err != nil {
-		return nil, err
+		return "", err
 	}
 
-	return &JoinNodeResult{
-		Joined:            true,
-		LeaderGRPCAddress: s.node.GetLeaderGRPCAddress(),
-	}, nil
+	return s.node.GetLeaderGRPCAddress(), nil
 }
 
 // RemoveNode removes a node from the Raft cluster.
-func (s *Service) RemoveNode(nodeID string) (*RemoveNodeResult, error) {
+func (s *Service) RemoveNode(nodeID string) error {
 	if err := s.ensureLeader(); err != nil {
-		return nil, err
+		return err
 	}
 	if nodeID == "" {
-		return nil, &InvalidArgumentError{Message: "node_id required"}
+		return &InvalidArgumentError{Message: "node_id required"}
 	}
 
-	if err := s.node.RemoveClusterMember(nodeID); err != nil {
-		return nil, err
-	}
-
-	return &RemoveNodeResult{Removed: true}, nil
+	return s.node.RemoveClusterMember(nodeID)
 }

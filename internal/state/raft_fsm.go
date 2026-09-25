@@ -81,6 +81,13 @@ func (rf *RaftFSM) Restore(snapshot io.ReadCloser) error {
 		return err
 	}
 
+	// Endpoint metadata was added after the initial snapshot format shipped.
+	// Older snapshots legitimately omit this field, so restore them with an
+	// empty endpoint map and let the leader repopulate it.
+	if snap.Endpoints == nil {
+		snap.Endpoints = make(map[string]string)
+	}
+
 	rf.fsm.mu.Lock()
 	defer rf.fsm.mu.Unlock()
 
@@ -104,10 +111,6 @@ func validateSnapshot(snap *fsmSnapshot) error {
 	if snap.Leases == nil {
 		return fmt.Errorf("snapshot leases missing")
 	}
-	if snap.Endpoints == nil {
-		return fmt.Errorf("snapshot endpoints missing")
-	}
-
 	for leaseID, lease := range snap.Leases {
 		if lease == nil {
 			return fmt.Errorf("snapshot lease %d is nil", leaseID)

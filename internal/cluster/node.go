@@ -26,6 +26,7 @@ type Node struct {
 	cfg          *Config
 	stopCh       chan struct{}
 	shutdownOnce sync.Once
+	clockStarted time.Time
 
 	pendingRenewalsMu sync.Mutex
 	pendingRenewals   map[uint64]map[int64]int
@@ -94,7 +95,7 @@ func NewNode(cfg *Config) (*Node, error) {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
 	}
 
-	r, err := raft.NewRaft(raftCfg, raftFSM, raftStorage.LogStore, raftStorage.StableStore, raftStorage.SnapshotStore, transport)
+	r, err := raft.NewRaft(raftCfg, raftFSM, raftStorage.Bolt, raftStorage.Bolt, raftStorage.SnapshotStore, transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create raft: %w", err)
 	}
@@ -102,7 +103,7 @@ func NewNode(cfg *Config) (*Node, error) {
 	if cfg.Bootstrap {
 		// Only bootstrap brand-new storage. Existing storage already has a
 		// cluster configuration and must be allowed to rejoin that cluster.
-		hasState, err := raft.HasExistingState(raftStorage.LogStore, raftStorage.StableStore, raftStorage.SnapshotStore)
+		hasState, err := raft.HasExistingState(raftStorage.Bolt, raftStorage.Bolt, raftStorage.SnapshotStore)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check existing state: %w", err)
 		}
@@ -122,13 +123,14 @@ func NewNode(cfg *Config) (*Node, error) {
 	}
 
 	node := &Node{
-		raft:      r,
-		fsm:       stateMachine,
-		raftFSM:   raftFSM,
-		transport: transport,
-		storage:   raftStorage,
-		cfg:       cfg,
-		stopCh:    make(chan struct{}),
+		raft:         r,
+		fsm:          stateMachine,
+		raftFSM:      raftFSM,
+		transport:    transport,
+		storage:      raftStorage,
+		cfg:          cfg,
+		stopCh:       make(chan struct{}),
+		clockStarted: time.Now(),
 
 		pendingRenewals: make(map[uint64]map[int64]int),
 	}
@@ -148,7 +150,7 @@ func NewNode(cfg *Config) (*Node, error) {
 func (n *Node) Apply(cmd *raftlog.CommandWrapper) (any, error) {
 	data, err := proto.Marshal(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshap proto: %w", err)
+		return nil, fmt.Errorf("failed to marshal proto: %w", err)
 	}
 
 	// Replicate to the cluster through Raft. The timeout bounds how long the
@@ -173,6 +175,17 @@ func (n *Node) IsLeader() bool {
 	return n.raft.State() == raft.Leader
 }
 
+// Now returns a wall-clock timestamp advanced by Go's monotonic clock. The
+// wall component is captured when the node starts, so later operating-system
+// clock adjustments cannot prematurely expire live leases or shorten their
+// renewal window.
+func (n *Node) Now() time.Time {
+	if n.clockStarted.IsZero() {
+		return time.Now().UTC()
+	}
+	return n.clockStarted.Add(time.Since(n.clockStarted)).UTC()
+}
+
 // GetLeaderID returns the node ID of the current Raft leader, or empty if unknown.
 func (n *Node) GetLeaderID() string {
 	_, leaderID := n.raft.LeaderWithID()
@@ -189,11 +202,6 @@ func (n *Node) GetState() raft.RaftState {
 	return n.raft.State()
 }
 
-// GetClusterSize returns the current number of Raft servers in the config.
-func (n *Node) GetClusterSize() int {
-	return len(n.raft.GetConfiguration().Configuration().Servers)
-}
-
 // GetLeader returns the leader's Raft peer address. Clients should usually use
 // GetLeaderGRPCAddress instead because Raft addresses are not client-facing.
 func (n *Node) GetLeader() string {
@@ -203,10 +211,6 @@ func (n *Node) GetLeader() string {
 
 func (n *Node) GetFSM() *state.FSM {
 	return n.fsm
-}
-
-func (n *Node) LockState(lockName string) (bool, uint64) {
-	return n.fsm.LockState(lockName)
 }
 
 // WaitForLeader blocks until any Raft leader is known or timeout elapses.

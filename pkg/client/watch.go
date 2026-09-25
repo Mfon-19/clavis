@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"strings"
 	"time"
 )
 
@@ -24,7 +21,7 @@ func (c *Client) WaitAcquire(ctx context.Context, lockName string) (*Lock, error
 		if err == nil {
 			return lock, nil
 		}
-		if errors.Is(err, ErrLeaseUnavailable) || !isLockBusy(err) {
+		if !errors.Is(err, ErrLockHeld) {
 			return nil, err
 		}
 
@@ -40,11 +37,4 @@ func (c *Client) WaitAcquire(ctx context.Context, lockName string) (*Lock, error
 			backoff *= 2
 		}
 	}
-}
-
-func isLockBusy(err error) bool {
-	if status.Code(err) != codes.FailedPrecondition {
-		return false
-	}
-	return strings.Contains(err.Error(), "lock is already held")
 }

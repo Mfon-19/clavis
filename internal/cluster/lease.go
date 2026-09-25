@@ -1,9 +1,9 @@
 package cluster
 
 import (
-	"github.com/Mfon-19/clavis/internal/raftlog"
-	"sort"
 	"time"
+
+	"github.com/Mfon-19/clavis/internal/raftlog"
 )
 
 // recordPendingRenewal tracks in-flight renewal that has been submitted to
@@ -43,55 +43,38 @@ func (n *Node) clearPendingRenewal(leaseID uint64, proposedAt time.Time) {
 	}
 }
 
-// leaseExpiryHorizon projects the furthest possible expiry time for a lease,
-// accounting for any pending renewals that have been submitted to Raft but not
-// yet applied. This is the key correctness mechanism that prevents the expiry
-// loop from expiring a lease whose renewal is still in the Raft pipeline
-func (n *Node) leaseExpiryHorizon(leaseID uint64) (time.Time, bool) {
-	lease, exists := n.fsm.GetLease(leaseID)
-	if !exists {
-		return time.Time{}, false
-	}
-
+// hasPendingRenewalBefore reports whether a renewal proposed before deadline
+// is still in the Raft pipeline. Such a renewal will extend the lease when it
+// commits, so the lease must not be expired until it has.
+func (n *Node) hasPendingRenewalBefore(leaseID uint64, deadline time.Time) bool {
 	n.pendingRenewalsMu.Lock()
-	leaseRenewals := n.pendingRenewals[leaseID]
-	pendingTimes := make([]int64, 0, len(leaseRenewals))
-	for unixNano, count := range leaseRenewals {
-		for i := 0; i < count; i++ {
-			pendingTimes = append(pendingTimes, unixNano)
+	defer n.pendingRenewalsMu.Unlock()
+
+	for unixNano := range n.pendingRenewals[leaseID] {
+		if unixNano < deadline.UnixNano() {
+			return true
 		}
 	}
-	n.pendingRenewalsMu.Unlock()
-
-	if len(pendingTimes) == 0 {
-		return lease.ExpiresAt(), true
-	}
-
-	sort.Slice(pendingTimes, func(i, j int) bool {
-		return pendingTimes[i] < pendingTimes[j]
-	})
-
-	expiry := lease.ExpiresAt()
-	for _, unixNano := range pendingTimes {
-		proposedAt := time.Unix(0, unixNano).UTC()
-		if proposedAt.After(expiry) {
-			continue
-		}
-		expiry = proposedAt.Add(lease.TTL)
-	}
-
-	return expiry, true
+	return false
 }
 
-// shouldExpireLease returns true if the lease is expired even after accounting
-// for all pending renewals in the Raft pipeline
-func (n *Node) shouldExpireLease(leaseID uint64, now time.Time) bool {
-	expiry, exists := n.leaseExpiryHorizon(leaseID)
-	if !exists {
+// shouldExpireLease returns true if the lease is expired at now, no timely
+// renewal is still in flight, and this node has been leader for at least one
+// full TTL.
+//
+// The leadership grace period exists because pending renewals are tracked only
+// on the leader that proposed them, and clients need time to find a new leader
+// after failover. Without it, a new leader would immediately expire every lease
+// whose holder was mid-reconnect.
+func (n *Node) shouldExpireLease(leaseID uint64, now, leaderSince time.Time) bool {
+	lease, exists := n.fsm.GetLease(leaseID)
+	if !exists || !lease.IsExpired(now) {
 		return false
 	}
-
-	return !now.Before(expiry)
+	if now.Before(leaderSince.Add(lease.TTL)) {
+		return false
+	}
+	return !n.hasPendingRenewalBefore(leaseID, lease.ExpiresAt())
 }
 
 // ApplyRenewLease renews a lease through Raft consensus while tracking the
@@ -108,22 +91,30 @@ func (n *Node) leaseExpiryLoop() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
+	// leaderTerm and leaderSince identify the current leadership stint. Polling
+	// IsLeader alone would miss a lose-and-regain between ticks; the Raft term
+	// always changes across such a transition.
+	var leaderTerm uint64
+	var leaderSince time.Time
+
 	for {
 		select {
 		case <-n.stopCh:
 			return
 		case <-ticker.C:
 			if !n.IsLeader() {
+				leaderTerm = 0
 				continue
 			}
 
-			now := time.Now().UTC()
-			expired := n.fsm.GetExpiredLeases(now)
-			for _, leaseID := range expired {
-				// A lease can look expired in the committed FSM while a timely
-				// renewal is still waiting for Raft commit. Re-check with the
-				// pending renewal horizon before proposing an expiry command
-				if !n.shouldExpireLease(leaseID, now) {
+			now := n.Now()
+			if term := n.raft.CurrentTerm(); term != leaderTerm {
+				leaderTerm = term
+				leaderSince = now
+			}
+
+			for _, leaseID := range n.fsm.GetExpiredLeases(now) {
+				if !n.shouldExpireLease(leaseID, now, leaderSince) {
 					continue
 				}
 				// Expiry still goes through Raft. Followers must see the same

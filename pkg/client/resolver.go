@@ -163,6 +163,21 @@ func (r *resolver) rememberAddr(addr string) {
 	defer r.mu.Unlock()
 
 	r.currentAddr = addr
+	r.rememberSeedLocked(addr)
+}
+
+func (r *resolver) rememberSeed(addr string) {
+	if addr == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.rememberSeedLocked(addr)
+}
+
+func (r *resolver) rememberSeedLocked(addr string) {
 	for _, existing := range r.seedAddrs {
 		if existing == addr {
 			return
@@ -178,10 +193,16 @@ func (r *resolver) rememberStatus(resp *pb.GetStatusResponse) {
 		return
 	}
 
-	r.rememberAddr(resp.GrpcAddress)
-	r.rememberAddr(resp.LeaderGrpcAddress)
+	r.rememberSeed(resp.GrpcAddress)
 	for _, member := range resp.Members {
-		r.rememberAddr(member.GetGrpcAddress())
+		r.rememberSeed(member.GetGrpcAddress())
+	}
+
+	switch {
+	case resp.LeaderGrpcAddress != "":
+		r.rememberAddr(resp.LeaderGrpcAddress)
+	case resp.IsLeader && resp.GrpcAddress != "":
+		r.rememberAddr(resp.GrpcAddress)
 	}
 }
 
@@ -231,32 +252,52 @@ func (r *resolver) discoverLeader(ctx context.Context) (string, error) {
 // callWithFailover executes on SDK RPC against the cluster with automatic
 // leader chasing. This function is generic so Acquire, Release, CreateLease,
 // and Status all share the same retry behaviour
-func callWithFailover[T any](c *Client, ctx context.Context, op func(pb.LockServiceClient) (T, error)) (T, error) {
+func callWithFailover[T any](
+	c *Client,
+	ctx context.Context,
+	op func(context.Context, pb.LockServiceClient) (T, error),
+) (T, error) {
 	var zero T
 	var lastErr error
-	seen := make(map[string]struct{})
 	queue := append([]string(nil), c.resolver.candidateAddrs()...)
+	maxOperationAttempts := len(queue) + 3
+	const maxDiscoveryRounds = 2
 
-	for attempts := 0; attempts < len(queue)+3; attempts++ {
-		if attempts >= len(queue) {
+	addressAttempts := make(map[string]int)
+	operationAttempts := 0
+	discoveryRounds := 0
+
+	for operationAttempts < maxOperationAttempts {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+
+		if len(queue) == 0 {
+			if discoveryRounds >= maxDiscoveryRounds {
+				break
+			}
+			discoveryRounds++
 			leaderAddr, err := c.resolver.discoverLeader(ctx)
 			if err != nil {
-				if lastErr != nil {
-					return zero, lastErr
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return zero, ctxErr
 				}
-				return zero, err
+				lastErr = err
+				continue
 			}
 			queue = append(queue, leaderAddr)
 		}
 
-		addr := queue[attempts]
+		addr := queue[0]
+		queue = queue[1:]
 		if addr == "" {
 			continue
 		}
-		if _, exists := seen[addr]; exists {
+		if addressAttempts[addr] >= 2 {
 			continue
 		}
-		seen[addr] = struct{}{}
+		addressAttempts[addr]++
+		operationAttempts++
 
 		conn, err := c.resolver.connFor(addr)
 		if err != nil {
@@ -265,7 +306,12 @@ func callWithFailover[T any](c *Client, ctx context.Context, op func(pb.LockServ
 		}
 		client := pb.NewLockServiceClient(conn)
 
-		resp, err := op(client)
+		// A blackholed endpoint must not consume the caller's entire lifetime
+		// and prevent later candidates from being tried. Six seconds exceeds
+		// the server's five-second Raft apply timeout.
+		attemptCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		resp, err := op(attemptCtx, client)
+		cancel()
 		if err == nil {
 			c.resolver.rememberAddr(addr)
 			return resp, nil
@@ -274,6 +320,7 @@ func callWithFailover[T any](c *Client, ctx context.Context, op func(pb.LockServ
 		lastErr = err
 		if leaderAddr := leaderhint.FromError(err); leaderAddr != "" {
 			c.resolver.rememberAddr(leaderAddr)
+			// Process the structured redirect on the very next iteration.
 			queue = append([]string{leaderAddr}, queue...)
 			continue
 		}

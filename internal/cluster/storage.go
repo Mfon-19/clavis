@@ -1,58 +1,43 @@
 package cluster
 
 import (
-	"github.com/hashicorp/raft"
-	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 	"os"
 	"path/filepath"
+
+	"github.com/hashicorp/raft"
+	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 )
 
-// Storage groups the three persistence interfaces HashiCorp Raft needs:
-//   - LogStore: append-only replicated command log
-//   - StableStore: durable Raft metadata such as current term and votes
-//   - SnapshotStore: compacted FSM snapshots used for catch-up and restart
-//
-// LogStore and StableStore share sone BoltDB file. Snapshots are stored in a
-// sibling directory because HashiCorp Raft's file snapshot expects a directory,
-// not a key/value database.
+// Storage groups the persistence HashiCorp Raft needs. A single BoltDB file
+// serves as both the append-only log store and the stable store (current term,
+// votes). Snapshots are stored in a sibling directory because HashiCorp Raft's
+// file snapshot store expects a directory, not a key/value database.
 type Storage struct {
-	LogStore      raft.LogStore
-	StableStore   raft.StableStore
+	Bolt          *raftboltdb.BoltStore
 	SnapshotStore raft.SnapshotStore
 }
 
+// NewStorage opens the Raft stores under dataDir, which must already exist.
 func NewStorage(dataDir string) (*Storage, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return nil, err
-	}
-
-	dbPath := filepath.Join(dataDir, "raft.db")
-
-	boltDb, err := raftboltdb.New(raftboltdb.Options{
-		Path: dbPath,
+	bolt, err := raftboltdb.New(raftboltdb.Options{
+		Path: filepath.Join(dataDir, "raft.db"),
 	})
-
 	if err != nil {
 		return nil, err
 	}
 
-	snapshotDir := filepath.Join(dataDir, "snapshots")
-	snapShotStore, err := raft.NewFileSnapshotStore(snapshotDir, 3, os.Stderr)
+	snapshotStore, err := raft.NewFileSnapshotStore(filepath.Join(dataDir, "snapshots"), 3, os.Stderr)
 	if err != nil {
-		boltDb.Close()
+		bolt.Close()
 		return nil, err
 	}
 
 	return &Storage{
-		LogStore:      boltDb,
-		StableStore:   boltDb,
-		SnapshotStore: snapShotStore,
+		Bolt:          bolt,
+		SnapshotStore: snapshotStore,
 	}, nil
 }
 
-func (b *Storage) Close() error {
-	if closer, ok := b.LogStore.(interface{ Close() error }); ok {
-		return closer.Close()
-	}
-	return nil
+func (s *Storage) Close() error {
+	return s.Bolt.Close()
 }

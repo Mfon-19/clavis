@@ -23,8 +23,7 @@ const (
 
 type CreateLeaseRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// owner_id is used only when no authenticated workload identity is present.
-	// With mTLS, the server derives the effective owner from the client cert.
+	// owner_id identifies the caller that owns the lease
 	OwnerId string `protobuf:"bytes,1,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
 	// ttl_seconds controls how long the lease remains valid without renewal.
 	TtlSeconds    int64 `protobuf:"varint,2,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
@@ -129,94 +128,6 @@ func (x *CreateLeaseResponse) GetTtlSeconds() int64 {
 	return 0
 }
 
-type RenewLeaseRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	LeaseId       uint64                 `protobuf:"varint,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RenewLeaseRequest) Reset() {
-	*x = RenewLeaseRequest{}
-	mi := &file_lock_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RenewLeaseRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RenewLeaseRequest) ProtoMessage() {}
-
-func (x *RenewLeaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RenewLeaseRequest.ProtoReflect.Descriptor instead.
-func (*RenewLeaseRequest) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *RenewLeaseRequest) GetLeaseId() uint64 {
-	if x != nil {
-		return x.LeaseId
-	}
-	return 0
-}
-
-type RenewLeaseResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TtlSeconds    int64                  `protobuf:"varint,1,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RenewLeaseResponse) Reset() {
-	*x = RenewLeaseResponse{}
-	mi := &file_lock_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RenewLeaseResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RenewLeaseResponse) ProtoMessage() {}
-
-func (x *RenewLeaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RenewLeaseResponse.ProtoReflect.Descriptor instead.
-func (*RenewLeaseResponse) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *RenewLeaseResponse) GetTtlSeconds() int64 {
-	if x != nil {
-		return x.TtlSeconds
-	}
-	return 0
-}
-
 type HeartbeatRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	LeaseId       uint64                 `protobuf:"varint,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
@@ -226,7 +137,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_lock_proto_msgTypes[4]
+	mi := &file_lock_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -238,7 +149,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[4]
+	mi := &file_lock_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -251,7 +162,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{4}
+	return file_lock_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *HeartbeatRequest) GetLeaseId() uint64 {
@@ -271,7 +182,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_lock_proto_msgTypes[5]
+	mi := &file_lock_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -283,7 +194,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[5]
+	mi := &file_lock_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -296,7 +207,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{5}
+	return file_lock_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *HeartbeatResponse) GetLeaseId() uint64 {
@@ -316,7 +227,7 @@ func (x *HeartbeatResponse) GetTtlSeconds() int64 {
 type AcquireLockRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	LockName string                 `protobuf:"bytes,1,opt,name=lock_name,json=lockName,proto3" json:"lock_name,omitempty"`
-	// owner_id is overridden by mTLS-derived workload identity when available.
+	// owner_id must match the owner that created the lease.
 	OwnerId       string `protobuf:"bytes,2,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
 	LeaseId       uint64 `protobuf:"varint,3,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -325,7 +236,7 @@ type AcquireLockRequest struct {
 
 func (x *AcquireLockRequest) Reset() {
 	*x = AcquireLockRequest{}
-	mi := &file_lock_proto_msgTypes[6]
+	mi := &file_lock_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -337,7 +248,7 @@ func (x *AcquireLockRequest) String() string {
 func (*AcquireLockRequest) ProtoMessage() {}
 
 func (x *AcquireLockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[6]
+	mi := &file_lock_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -350,7 +261,7 @@ func (x *AcquireLockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireLockRequest.ProtoReflect.Descriptor instead.
 func (*AcquireLockRequest) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{6}
+	return file_lock_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AcquireLockRequest) GetLockName() string {
@@ -386,7 +297,7 @@ type AcquireLockResponse struct {
 
 func (x *AcquireLockResponse) Reset() {
 	*x = AcquireLockResponse{}
-	mi := &file_lock_proto_msgTypes[7]
+	mi := &file_lock_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -398,7 +309,7 @@ func (x *AcquireLockResponse) String() string {
 func (*AcquireLockResponse) ProtoMessage() {}
 
 func (x *AcquireLockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[7]
+	mi := &file_lock_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -411,7 +322,7 @@ func (x *AcquireLockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireLockResponse.ProtoReflect.Descriptor instead.
 func (*AcquireLockResponse) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{7}
+	return file_lock_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *AcquireLockResponse) GetFencingToken() uint64 {
@@ -438,7 +349,7 @@ type ReleaseLockRequest struct {
 
 func (x *ReleaseLockRequest) Reset() {
 	*x = ReleaseLockRequest{}
-	mi := &file_lock_proto_msgTypes[8]
+	mi := &file_lock_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -450,7 +361,7 @@ func (x *ReleaseLockRequest) String() string {
 func (*ReleaseLockRequest) ProtoMessage() {}
 
 func (x *ReleaseLockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[8]
+	mi := &file_lock_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -463,7 +374,7 @@ func (x *ReleaseLockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseLockRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseLockRequest) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{8}
+	return file_lock_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ReleaseLockRequest) GetLockName() string {
@@ -489,7 +400,7 @@ type ReleaseLockResponse struct {
 
 func (x *ReleaseLockResponse) Reset() {
 	*x = ReleaseLockResponse{}
-	mi := &file_lock_proto_msgTypes[9]
+	mi := &file_lock_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -501,7 +412,7 @@ func (x *ReleaseLockResponse) String() string {
 func (*ReleaseLockResponse) ProtoMessage() {}
 
 func (x *ReleaseLockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[9]
+	mi := &file_lock_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -514,7 +425,7 @@ func (x *ReleaseLockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseLockResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseLockResponse) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{9}
+	return file_lock_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ReleaseLockResponse) GetReleased() bool {
@@ -532,7 +443,7 @@ type GetStatusRequest struct {
 
 func (x *GetStatusRequest) Reset() {
 	*x = GetStatusRequest{}
-	mi := &file_lock_proto_msgTypes[10]
+	mi := &file_lock_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +455,7 @@ func (x *GetStatusRequest) String() string {
 func (*GetStatusRequest) ProtoMessage() {}
 
 func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[10]
+	mi := &file_lock_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,27 +468,25 @@ func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetStatusRequest) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{10}
+	return file_lock_proto_rawDescGZIP(), []int{8}
 }
 
 type GetStatusResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`                                     // This node's ID
 	IsLeader          bool                   `protobuf:"varint,2,opt,name=is_leader,json=isLeader,proto3" json:"is_leader,omitempty"`                              // Is this node the leader?
-	LeaderAddress     string                 `protobuf:"bytes,3,opt,name=leader_address,json=leaderAddress,proto3" json:"leader_address,omitempty"`                // Current leader address
-	ClusterSize       int32                  `protobuf:"varint,4,opt,name=cluster_size,json=clusterSize,proto3" json:"cluster_size,omitempty"`                     // Number of nodes in cluster
 	State             string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`                                                     // Raft state: "leader", "follower", "candidate"
 	Stats             *Stats                 `protobuf:"bytes,6,opt,name=stats,proto3" json:"stats,omitempty"`                                                     // FSM statistics
 	GrpcAddress       string                 `protobuf:"bytes,7,opt,name=grpc_address,json=grpcAddress,proto3" json:"grpc_address,omitempty"`                      // This node's gRPC address
-	Members           []*ClusterMember       `protobuf:"bytes,9,rep,name=members,proto3" json:"members,omitempty"`                                                 // Replicated node metadata for discovery
-	LeaderGrpcAddress string                 `protobuf:"bytes,10,opt,name=leader_grpc_address,json=leaderGrpcAddress,proto3" json:"leader_grpc_address,omitempty"` // Client-facing gRPC address of the leader
+	Members           []*ClusterMember       `protobuf:"bytes,9,rep,name=members,proto3" json:"members,omitempty"`                                                 // Active Raft members joined with shared gRPC endpoint metadata
+	LeaderGrpcAddress string                 `protobuf:"bytes,10,opt,name=leader_grpc_address,json=leaderGrpcAddress,proto3" json:"leader_grpc_address,omitempty"` // Client-facing gRPC address of the leader from shared endpoint metadata
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GetStatusResponse) Reset() {
 	*x = GetStatusResponse{}
-	mi := &file_lock_proto_msgTypes[11]
+	mi := &file_lock_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -589,7 +498,7 @@ func (x *GetStatusResponse) String() string {
 func (*GetStatusResponse) ProtoMessage() {}
 
 func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[11]
+	mi := &file_lock_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -602,7 +511,7 @@ func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetStatusResponse) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{11}
+	return file_lock_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetStatusResponse) GetNodeId() string {
@@ -617,20 +526,6 @@ func (x *GetStatusResponse) GetIsLeader() bool {
 		return x.IsLeader
 	}
 	return false
-}
-
-func (x *GetStatusResponse) GetLeaderAddress() string {
-	if x != nil {
-		return x.LeaderAddress
-	}
-	return ""
-}
-
-func (x *GetStatusResponse) GetClusterSize() int32 {
-	if x != nil {
-		return x.ClusterSize
-	}
-	return 0
 }
 
 func (x *GetStatusResponse) GetState() string {
@@ -673,14 +568,13 @@ func (x *GetStatusResponse) GetLeaderGrpcAddress() string {
 type LeaderHint struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	GrpcAddress   string                 `protobuf:"bytes,1,opt,name=grpc_address,json=grpcAddress,proto3" json:"grpc_address,omitempty"`
-	RaftAddress   string                 `protobuf:"bytes,2,opt,name=raft_address,json=raftAddress,proto3" json:"raft_address,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *LeaderHint) Reset() {
 	*x = LeaderHint{}
-	mi := &file_lock_proto_msgTypes[12]
+	mi := &file_lock_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -692,7 +586,7 @@ func (x *LeaderHint) String() string {
 func (*LeaderHint) ProtoMessage() {}
 
 func (x *LeaderHint) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[12]
+	mi := &file_lock_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -705,19 +599,12 @@ func (x *LeaderHint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LeaderHint.ProtoReflect.Descriptor instead.
 func (*LeaderHint) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{12}
+	return file_lock_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *LeaderHint) GetGrpcAddress() string {
 	if x != nil {
 		return x.GrpcAddress
-	}
-	return ""
-}
-
-func (x *LeaderHint) GetRaftAddress() string {
-	if x != nil {
-		return x.RaftAddress
 	}
 	return ""
 }
@@ -733,7 +620,7 @@ type Stats struct {
 
 func (x *Stats) Reset() {
 	*x = Stats{}
-	mi := &file_lock_proto_msgTypes[13]
+	mi := &file_lock_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -745,7 +632,7 @@ func (x *Stats) String() string {
 func (*Stats) ProtoMessage() {}
 
 func (x *Stats) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[13]
+	mi := &file_lock_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -758,7 +645,7 @@ func (x *Stats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Stats.ProtoReflect.Descriptor instead.
 func (*Stats) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{13}
+	return file_lock_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Stats) GetLeases() int32 {
@@ -796,7 +683,7 @@ type ClusterMember struct {
 
 func (x *ClusterMember) Reset() {
 	*x = ClusterMember{}
-	mi := &file_lock_proto_msgTypes[14]
+	mi := &file_lock_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -808,7 +695,7 @@ func (x *ClusterMember) String() string {
 func (*ClusterMember) ProtoMessage() {}
 
 func (x *ClusterMember) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[14]
+	mi := &file_lock_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -821,7 +708,7 @@ func (x *ClusterMember) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterMember.ProtoReflect.Descriptor instead.
 func (*ClusterMember) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{14}
+	return file_lock_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ClusterMember) GetNodeId() string {
@@ -856,7 +743,7 @@ type JoinNodeRequest struct {
 
 func (x *JoinNodeRequest) Reset() {
 	*x = JoinNodeRequest{}
-	mi := &file_lock_proto_msgTypes[15]
+	mi := &file_lock_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -868,7 +755,7 @@ func (x *JoinNodeRequest) String() string {
 func (*JoinNodeRequest) ProtoMessage() {}
 
 func (x *JoinNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[15]
+	mi := &file_lock_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -881,7 +768,7 @@ func (x *JoinNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinNodeRequest.ProtoReflect.Descriptor instead.
 func (*JoinNodeRequest) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{15}
+	return file_lock_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *JoinNodeRequest) GetNodeId() string {
@@ -915,7 +802,7 @@ type JoinNodeResponse struct {
 
 func (x *JoinNodeResponse) Reset() {
 	*x = JoinNodeResponse{}
-	mi := &file_lock_proto_msgTypes[16]
+	mi := &file_lock_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -927,7 +814,7 @@ func (x *JoinNodeResponse) String() string {
 func (*JoinNodeResponse) ProtoMessage() {}
 
 func (x *JoinNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[16]
+	mi := &file_lock_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -940,7 +827,7 @@ func (x *JoinNodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinNodeResponse.ProtoReflect.Descriptor instead.
 func (*JoinNodeResponse) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{16}
+	return file_lock_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *JoinNodeResponse) GetJoined() bool {
@@ -966,7 +853,7 @@ type RemoveNodeRequest struct {
 
 func (x *RemoveNodeRequest) Reset() {
 	*x = RemoveNodeRequest{}
-	mi := &file_lock_proto_msgTypes[17]
+	mi := &file_lock_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -978,7 +865,7 @@ func (x *RemoveNodeRequest) String() string {
 func (*RemoveNodeRequest) ProtoMessage() {}
 
 func (x *RemoveNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[17]
+	mi := &file_lock_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -991,7 +878,7 @@ func (x *RemoveNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveNodeRequest.ProtoReflect.Descriptor instead.
 func (*RemoveNodeRequest) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{17}
+	return file_lock_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *RemoveNodeRequest) GetNodeId() string {
@@ -1010,7 +897,7 @@ type RemoveNodeResponse struct {
 
 func (x *RemoveNodeResponse) Reset() {
 	*x = RemoveNodeResponse{}
-	mi := &file_lock_proto_msgTypes[18]
+	mi := &file_lock_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1022,7 +909,7 @@ func (x *RemoveNodeResponse) String() string {
 func (*RemoveNodeResponse) ProtoMessage() {}
 
 func (x *RemoveNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lock_proto_msgTypes[18]
+	mi := &file_lock_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1035,7 +922,7 @@ func (x *RemoveNodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveNodeResponse.ProtoReflect.Descriptor instead.
 func (*RemoveNodeResponse) Descriptor() ([]byte, []int) {
-	return file_lock_proto_rawDescGZIP(), []int{18}
+	return file_lock_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RemoveNodeResponse) GetRemoved() bool {
@@ -1058,11 +945,6 @@ const file_lock_proto_rawDesc = "" +
 	"\x13CreateLeaseResponse\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\x04R\aleaseId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
-	"ttlSeconds\".\n" +
-	"\x11RenewLeaseRequest\x12\x19\n" +
-	"\blease_id\x18\x01 \x01(\x04R\aleaseId\"5\n" +
-	"\x12RenewLeaseResponse\x12\x1f\n" +
-	"\vttl_seconds\x18\x01 \x01(\x03R\n" +
 	"ttlSeconds\"-\n" +
 	"\x10HeartbeatRequest\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\x04R\aleaseId\"O\n" +
@@ -1082,22 +964,19 @@ const file_lock_proto_rawDesc = "" +
 	"\blease_id\x18\x02 \x01(\x04R\aleaseId\"1\n" +
 	"\x13ReleaseLockResponse\x12\x1a\n" +
 	"\breleased\x18\x01 \x01(\bR\breleased\"\x12\n" +
-	"\x10GetStatusRequest\"\xd8\x02\n" +
+	"\x10GetStatusRequest\"\xb8\x02\n" +
 	"\x11GetStatusResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
-	"\tis_leader\x18\x02 \x01(\bR\bisLeader\x12%\n" +
-	"\x0eleader_address\x18\x03 \x01(\tR\rleaderAddress\x12!\n" +
-	"\fcluster_size\x18\x04 \x01(\x05R\vclusterSize\x12\x14\n" +
+	"\tis_leader\x18\x02 \x01(\bR\bisLeader\x12\x14\n" +
 	"\x05state\x18\x05 \x01(\tR\x05state\x12&\n" +
 	"\x05stats\x18\x06 \x01(\v2\x10.clavis.v1.StatsR\x05stats\x12!\n" +
 	"\fgrpc_address\x18\a \x01(\tR\vgrpcAddress\x122\n" +
 	"\amembers\x18\t \x03(\v2\x18.clavis.v1.ClusterMemberR\amembers\x12.\n" +
 	"\x13leader_grpc_address\x18\n" +
-	" \x01(\tR\x11leaderGrpcAddress\"R\n" +
+	" \x01(\tR\x11leaderGrpcAddressJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x0eleader_addressR\fcluster_size\"C\n" +
 	"\n" +
 	"LeaderHint\x12!\n" +
-	"\fgrpc_address\x18\x01 \x01(\tR\vgrpcAddress\x12!\n" +
-	"\fraft_address\x18\x02 \x01(\tR\vraftAddress\"^\n" +
+	"\fgrpc_address\x18\x01 \x01(\tR\vgrpcAddressJ\x04\b\x02\x10\x03R\fraft_address\"^\n" +
 	"\x05Stats\x12\x16\n" +
 	"\x06leases\x18\x01 \x01(\x05R\x06leases\x12\x14\n" +
 	"\x05locks\x18\x02 \x01(\x05R\x05locks\x12'\n" +
@@ -1116,11 +995,9 @@ const file_lock_proto_rawDesc = "" +
 	"\x11RemoveNodeRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\".\n" +
 	"\x12RemoveNodeResponse\x12\x18\n" +
-	"\aremoved\x18\x01 \x01(\bR\aremoved2\xd6\x03\n" +
+	"\aremoved\x18\x01 \x01(\bR\aremoved2\x8b\x03\n" +
 	"\vLockService\x12L\n" +
-	"\vCreateLease\x12\x1d.clavis.v1.CreateLeaseRequest\x1a\x1e.clavis.v1.CreateLeaseResponse\x12I\n" +
-	"\n" +
-	"RenewLease\x12\x1c.clavis.v1.RenewLeaseRequest\x1a\x1d.clavis.v1.RenewLeaseResponse\x12J\n" +
+	"\vCreateLease\x12\x1d.clavis.v1.CreateLeaseRequest\x1a\x1e.clavis.v1.CreateLeaseResponse\x12J\n" +
 	"\tHeartbeat\x12\x1b.clavis.v1.HeartbeatRequest\x1a\x1c.clavis.v1.HeartbeatResponse(\x010\x01\x12L\n" +
 	"\vAcquireLock\x12\x1d.clavis.v1.AcquireLockRequest\x1a\x1e.clavis.v1.AcquireLockResponse\x12L\n" +
 	"\vReleaseLock\x12\x1d.clavis.v1.ReleaseLockRequest\x1a\x1e.clavis.v1.ReleaseLockResponse\x12F\n" +
@@ -1129,7 +1006,7 @@ const file_lock_proto_rawDesc = "" +
 	"\tGetStatus\x12\x1b.clavis.v1.GetStatusRequest\x1a\x1c.clavis.v1.GetStatusResponse\x12C\n" +
 	"\bJoinNode\x12\x1a.clavis.v1.JoinNodeRequest\x1a\x1b.clavis.v1.JoinNodeResponse\x12I\n" +
 	"\n" +
-	"RemoveNode\x12\x1c.clavis.v1.RemoveNodeRequest\x1a\x1d.clavis.v1.RemoveNodeResponseB\x1bZ\x19github.com/Mfon-19/clavisb\x06proto3"
+	"RemoveNode\x12\x1c.clavis.v1.RemoveNodeRequest\x1a\x1d.clavis.v1.RemoveNodeResponseB%Z#github.com/Mfon-19/clavis/api/v1;v1b\x06proto3"
 
 var (
 	file_lock_proto_rawDescOnce sync.Once
@@ -1143,51 +1020,47 @@ func file_lock_proto_rawDescGZIP() []byte {
 	return file_lock_proto_rawDescData
 }
 
-var file_lock_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_lock_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_lock_proto_goTypes = []any{
 	(*CreateLeaseRequest)(nil),  // 0: clavis.v1.CreateLeaseRequest
 	(*CreateLeaseResponse)(nil), // 1: clavis.v1.CreateLeaseResponse
-	(*RenewLeaseRequest)(nil),   // 2: clavis.v1.RenewLeaseRequest
-	(*RenewLeaseResponse)(nil),  // 3: clavis.v1.RenewLeaseResponse
-	(*HeartbeatRequest)(nil),    // 4: clavis.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),   // 5: clavis.v1.HeartbeatResponse
-	(*AcquireLockRequest)(nil),  // 6: clavis.v1.AcquireLockRequest
-	(*AcquireLockResponse)(nil), // 7: clavis.v1.AcquireLockResponse
-	(*ReleaseLockRequest)(nil),  // 8: clavis.v1.ReleaseLockRequest
-	(*ReleaseLockResponse)(nil), // 9: clavis.v1.ReleaseLockResponse
-	(*GetStatusRequest)(nil),    // 10: clavis.v1.GetStatusRequest
-	(*GetStatusResponse)(nil),   // 11: clavis.v1.GetStatusResponse
-	(*LeaderHint)(nil),          // 12: clavis.v1.LeaderHint
-	(*Stats)(nil),               // 13: clavis.v1.Stats
-	(*ClusterMember)(nil),       // 14: clavis.v1.ClusterMember
-	(*JoinNodeRequest)(nil),     // 15: clavis.v1.JoinNodeRequest
-	(*JoinNodeResponse)(nil),    // 16: clavis.v1.JoinNodeResponse
-	(*RemoveNodeRequest)(nil),   // 17: clavis.v1.RemoveNodeRequest
-	(*RemoveNodeResponse)(nil),  // 18: clavis.v1.RemoveNodeResponse
+	(*HeartbeatRequest)(nil),    // 2: clavis.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),   // 3: clavis.v1.HeartbeatResponse
+	(*AcquireLockRequest)(nil),  // 4: clavis.v1.AcquireLockRequest
+	(*AcquireLockResponse)(nil), // 5: clavis.v1.AcquireLockResponse
+	(*ReleaseLockRequest)(nil),  // 6: clavis.v1.ReleaseLockRequest
+	(*ReleaseLockResponse)(nil), // 7: clavis.v1.ReleaseLockResponse
+	(*GetStatusRequest)(nil),    // 8: clavis.v1.GetStatusRequest
+	(*GetStatusResponse)(nil),   // 9: clavis.v1.GetStatusResponse
+	(*LeaderHint)(nil),          // 10: clavis.v1.LeaderHint
+	(*Stats)(nil),               // 11: clavis.v1.Stats
+	(*ClusterMember)(nil),       // 12: clavis.v1.ClusterMember
+	(*JoinNodeRequest)(nil),     // 13: clavis.v1.JoinNodeRequest
+	(*JoinNodeResponse)(nil),    // 14: clavis.v1.JoinNodeResponse
+	(*RemoveNodeRequest)(nil),   // 15: clavis.v1.RemoveNodeRequest
+	(*RemoveNodeResponse)(nil),  // 16: clavis.v1.RemoveNodeResponse
 }
 var file_lock_proto_depIdxs = []int32{
-	13, // 0: clavis.v1.GetStatusResponse.stats:type_name -> clavis.v1.Stats
-	14, // 1: clavis.v1.GetStatusResponse.members:type_name -> clavis.v1.ClusterMember
+	11, // 0: clavis.v1.GetStatusResponse.stats:type_name -> clavis.v1.Stats
+	12, // 1: clavis.v1.GetStatusResponse.members:type_name -> clavis.v1.ClusterMember
 	0,  // 2: clavis.v1.LockService.CreateLease:input_type -> clavis.v1.CreateLeaseRequest
-	2,  // 3: clavis.v1.LockService.RenewLease:input_type -> clavis.v1.RenewLeaseRequest
-	4,  // 4: clavis.v1.LockService.Heartbeat:input_type -> clavis.v1.HeartbeatRequest
-	6,  // 5: clavis.v1.LockService.AcquireLock:input_type -> clavis.v1.AcquireLockRequest
-	8,  // 6: clavis.v1.LockService.ReleaseLock:input_type -> clavis.v1.ReleaseLockRequest
-	10, // 7: clavis.v1.LockService.GetStatus:input_type -> clavis.v1.GetStatusRequest
-	10, // 8: clavis.v1.AdminService.GetStatus:input_type -> clavis.v1.GetStatusRequest
-	15, // 9: clavis.v1.AdminService.JoinNode:input_type -> clavis.v1.JoinNodeRequest
-	17, // 10: clavis.v1.AdminService.RemoveNode:input_type -> clavis.v1.RemoveNodeRequest
-	1,  // 11: clavis.v1.LockService.CreateLease:output_type -> clavis.v1.CreateLeaseResponse
-	3,  // 12: clavis.v1.LockService.RenewLease:output_type -> clavis.v1.RenewLeaseResponse
-	5,  // 13: clavis.v1.LockService.Heartbeat:output_type -> clavis.v1.HeartbeatResponse
-	7,  // 14: clavis.v1.LockService.AcquireLock:output_type -> clavis.v1.AcquireLockResponse
-	9,  // 15: clavis.v1.LockService.ReleaseLock:output_type -> clavis.v1.ReleaseLockResponse
-	11, // 16: clavis.v1.LockService.GetStatus:output_type -> clavis.v1.GetStatusResponse
-	11, // 17: clavis.v1.AdminService.GetStatus:output_type -> clavis.v1.GetStatusResponse
-	16, // 18: clavis.v1.AdminService.JoinNode:output_type -> clavis.v1.JoinNodeResponse
-	18, // 19: clavis.v1.AdminService.RemoveNode:output_type -> clavis.v1.RemoveNodeResponse
-	11, // [11:20] is the sub-list for method output_type
-	2,  // [2:11] is the sub-list for method input_type
+	2,  // 3: clavis.v1.LockService.Heartbeat:input_type -> clavis.v1.HeartbeatRequest
+	4,  // 4: clavis.v1.LockService.AcquireLock:input_type -> clavis.v1.AcquireLockRequest
+	6,  // 5: clavis.v1.LockService.ReleaseLock:input_type -> clavis.v1.ReleaseLockRequest
+	8,  // 6: clavis.v1.LockService.GetStatus:input_type -> clavis.v1.GetStatusRequest
+	8,  // 7: clavis.v1.AdminService.GetStatus:input_type -> clavis.v1.GetStatusRequest
+	13, // 8: clavis.v1.AdminService.JoinNode:input_type -> clavis.v1.JoinNodeRequest
+	15, // 9: clavis.v1.AdminService.RemoveNode:input_type -> clavis.v1.RemoveNodeRequest
+	1,  // 10: clavis.v1.LockService.CreateLease:output_type -> clavis.v1.CreateLeaseResponse
+	3,  // 11: clavis.v1.LockService.Heartbeat:output_type -> clavis.v1.HeartbeatResponse
+	5,  // 12: clavis.v1.LockService.AcquireLock:output_type -> clavis.v1.AcquireLockResponse
+	7,  // 13: clavis.v1.LockService.ReleaseLock:output_type -> clavis.v1.ReleaseLockResponse
+	9,  // 14: clavis.v1.LockService.GetStatus:output_type -> clavis.v1.GetStatusResponse
+	9,  // 15: clavis.v1.AdminService.GetStatus:output_type -> clavis.v1.GetStatusResponse
+	14, // 16: clavis.v1.AdminService.JoinNode:output_type -> clavis.v1.JoinNodeResponse
+	16, // 17: clavis.v1.AdminService.RemoveNode:output_type -> clavis.v1.RemoveNodeResponse
+	10, // [10:18] is the sub-list for method output_type
+	2,  // [2:10] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -1204,7 +1077,7 @@ func file_lock_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lock_proto_rawDesc), len(file_lock_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

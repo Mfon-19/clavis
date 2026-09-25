@@ -37,17 +37,18 @@
     (is (= "n1" (:node opened)))))
 
 (deftest fenced-register-checker-accepts-monotonic-token-history
-  (let [history [{:time 1 :index 1 :type :invoke :process 0 :f :fenced-write :value {:resource "a"}}
-                 {:time 2 :index 2 :type :ok :process 0 :f :fenced-write :value {:resource "a" :token 1}}
-                 {:time 3 :index 3 :type :invoke :process 0 :f :fenced-write :value {:resource "a"}}
+  (let [history [{:time 1 :index 1 :type :invoke :process 0 :f :fenced-write :value {:resource "a" :pause? true}}
+                 {:time 2 :index 2 :type :invoke :process 1 :f :fenced-write :value {:resource "a"}}
+                 {:time 3 :index 3 :type :ok :process 1 :f :fenced-write :value {:resource "a" :token 2}}
                  {:time 4 :index 4 :type :fail :process 0 :f :fenced-write :value {:resource "a" :token 1 :error :stale-token}}
-                 {:time 5 :index 5 :type :invoke :process 0 :f :fenced-write :value {:resource "a"}}
-                 {:time 6 :index 6 :type :ok :process 0 :f :fenced-write :value {:resource "a" :token 2}}
-                 {:time 7 :index 7 :type :invoke :process 0 :f :fenced-write :value {:resource "b"}}
-                 {:time 8 :index 8 :type :ok :process 0 :f :fenced-write :value {:resource "b" :token 1}}]
+                 {:time 5 :index 5 :type :invoke :process 1 :f :fenced-write :value {:resource "a"}}
+                 {:time 6 :index 6 :type :ok :process 1 :f :fenced-write :value {:resource "a" :token 3}}
+                 {:time 7 :index 7 :type :invoke :process 1 :f :fenced-write :value {:resource "b"}}
+                 {:time 8 :index 8 :type :ok :process 1 :f :fenced-write :value {:resource "b" :token 4}}]
         result (checker/check (clavis/->FencedRegisterChecker) nil history nil)]
     (is (true? (:valid? result)))
     (is (= 3 (:accepted-count result)))
+    (is (= 1 (:stale-rejection-count result)))
     (is (empty? (:violations result)))))
 
 (deftest fenced-register-checker-rejects-non-monotonic-token-history
@@ -57,4 +58,34 @@
                  {:time 4 :index 4 :type :ok :process 0 :f :fenced-write :value {:resource "a" :token 2}}]
         result (checker/check (clavis/->FencedRegisterChecker) nil history nil)]
     (is (false? (:valid? result)))
-    (is (= 1 (count (:violations result))))))
+    (is (some #(= :duplicate-token (:type %)) (:violations result)))
+    (is (some #(= :non-monotonic-token (:type %)) (:violations result)))))
+
+(deftest fenced-register-checker-requires-progress
+  (let [result (checker/check (clavis/->FencedRegisterChecker)
+                              {:min-successful-ops 0}
+                              []
+                              nil)]
+    (is (false? (:valid? result)))
+    (is (= 1 (:minimum-successful-ops result)))
+    (is (= :insufficient-progress (-> result :violations first :type)))))
+
+(deftest fenced-register-checker-rejects-global-token-reuse
+  (let [history [{:time 1 :index 1 :type :invoke :process 0 :f :fenced-write :value {:resource "a"}}
+                 {:time 2 :index 2 :type :ok :process 0 :f :fenced-write :value {:resource "a" :token 7}}
+                 {:time 3 :index 3 :type :invoke :process 0 :f :fenced-write :value {:resource "b"}}
+                 {:time 4 :index 4 :type :ok :process 0 :f :fenced-write :value {:resource "b" :token 7}}]
+        result (checker/check (clavis/->FencedRegisterChecker) nil history nil)]
+    (is (false? (:valid? result)))
+    (is (some #(= :duplicate-token (:type %)) (:violations result)))))
+
+(deftest fenced-register-checker-rejects-token-that-was-stale-when-issued
+  (let [history [{:time 1 :index 1 :type :invoke :process 0 :f :fenced-write :value {:resource "a"}}
+                 {:time 2 :index 2 :type :ok :process 0 :f :fenced-write :value {:resource "a" :token 6}}
+                 {:time 3 :index 3 :type :invoke :process 0 :f :fenced-write :value {:resource "a"}}
+                 {:time 4 :index 4 :type :fail :process 0 :f :fenced-write
+                  :value {:resource "a" :token 6 :error :stale-token}}]
+        result (checker/check (clavis/->FencedRegisterChecker) nil history nil)]
+    (is (false? (:valid? result)))
+    (is (some #(= :duplicate-token (:type %)) (:violations result)))
+    (is (some #(= :non-monotonic-token (:type %)) (:violations result)))))

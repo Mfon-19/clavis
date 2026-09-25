@@ -8,12 +8,14 @@ import (
 	"flag"
 	pb "github.com/Mfon-19/clavis/api/v1"
 	"github.com/Mfon-19/clavis/internal/app"
-	"github.com/google/uuid"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
+
+const shutdownTimeout = 10 * time.Second
 
 func main() {
 	var (
@@ -45,18 +47,12 @@ func main() {
 		return
 	}
 
-	var (
-		nid uuid.UUID
-		err error
-	)
-	if *nodeID == "" {
-		nid = uuid.New()
+	nid, generatedNodeID, err := app.ResolveNodeID(*dataDir, *nodeID)
+	if err != nil {
+		log.Fatalf("resolve node id: %v", err)
+	}
+	if generatedNodeID {
 		log.Printf("generated node id: %s", nid)
-	} else {
-		nid, err = uuid.Parse(*nodeID)
-		if err != nil {
-			log.Fatalf("invalid node id: %v", err)
-		}
 	}
 
 	resolvedRaftAdvertiseAddr, err := app.DeriveRaftAdvertiseAddr(*raftAddr, *raftAdvertiseAddr, *grpcAdvertiseAddr)
@@ -91,7 +87,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create runtime: %v", err)
 	}
-	defer runtime.Stop(context.Background())
 
 	errCh := runtime.Start(context.Background())
 	log.Printf("gRPC server listening on %s", *grpcAddr)
@@ -121,7 +116,9 @@ func main() {
 	}
 	log.Println("\nShutting down gracefully...")
 
-	if err := runtime.Stop(context.Background()); err != nil {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+	if err := runtime.Stop(shutdownCtx); err != nil {
 		log.Printf("shutdown error: %v", err)
 	}
 

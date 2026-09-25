@@ -20,7 +20,6 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	LockService_CreateLease_FullMethodName = "/clavis.v1.LockService/CreateLease"
-	LockService_RenewLease_FullMethodName  = "/clavis.v1.LockService/RenewLease"
 	LockService_Heartbeat_FullMethodName   = "/clavis.v1.LockService/Heartbeat"
 	LockService_AcquireLock_FullMethodName = "/clavis.v1.LockService/AcquireLock"
 	LockService_ReleaseLock_FullMethodName = "/clavis.v1.LockService/ReleaseLock"
@@ -36,7 +35,6 @@ const (
 // status. Mutating RPCs must be served by the current Raft leader.
 type LockServiceClient interface {
 	CreateLease(ctx context.Context, in *CreateLeaseRequest, opts ...grpc.CallOption) (*CreateLeaseResponse, error)
-	RenewLease(ctx context.Context, in *RenewLeaseRequest, opts ...grpc.CallOption) (*RenewLeaseResponse, error)
 	Heartbeat(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HeartbeatRequest, HeartbeatResponse], error)
 	AcquireLock(ctx context.Context, in *AcquireLockRequest, opts ...grpc.CallOption) (*AcquireLockResponse, error)
 	ReleaseLock(ctx context.Context, in *ReleaseLockRequest, opts ...grpc.CallOption) (*ReleaseLockResponse, error)
@@ -55,16 +53,6 @@ func (c *lockServiceClient) CreateLease(ctx context.Context, in *CreateLeaseRequ
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateLeaseResponse)
 	err := c.cc.Invoke(ctx, LockService_CreateLease_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *lockServiceClient) RenewLease(ctx context.Context, in *RenewLeaseRequest, opts ...grpc.CallOption) (*RenewLeaseResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RenewLeaseResponse)
-	err := c.cc.Invoke(ctx, LockService_RenewLease_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +111,6 @@ func (c *lockServiceClient) GetStatus(ctx context.Context, in *GetStatusRequest,
 // status. Mutating RPCs must be served by the current Raft leader.
 type LockServiceServer interface {
 	CreateLease(context.Context, *CreateLeaseRequest) (*CreateLeaseResponse, error)
-	RenewLease(context.Context, *RenewLeaseRequest) (*RenewLeaseResponse, error)
 	Heartbeat(grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]) error
 	AcquireLock(context.Context, *AcquireLockRequest) (*AcquireLockResponse, error)
 	ReleaseLock(context.Context, *ReleaseLockRequest) (*ReleaseLockResponse, error)
@@ -140,9 +127,6 @@ type UnimplementedLockServiceServer struct{}
 
 func (UnimplementedLockServiceServer) CreateLease(context.Context, *CreateLeaseRequest) (*CreateLeaseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateLease not implemented")
-}
-func (UnimplementedLockServiceServer) RenewLease(context.Context, *RenewLeaseRequest) (*RenewLeaseResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RenewLease not implemented")
 }
 func (UnimplementedLockServiceServer) Heartbeat(grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Heartbeat not implemented")
@@ -191,24 +175,6 @@ func _LockService_CreateLease_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(LockServiceServer).CreateLease(ctx, req.(*CreateLeaseRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _LockService_RenewLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RenewLeaseRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(LockServiceServer).RenewLease(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: LockService_RenewLease_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LockServiceServer).RenewLease(ctx, req.(*RenewLeaseRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -286,10 +252,6 @@ var LockService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _LockService_CreateLease_Handler,
 		},
 		{
-			MethodName: "RenewLease",
-			Handler:    _LockService_RenewLease_Handler,
-		},
-		{
 			MethodName: "AcquireLock",
 			Handler:    _LockService_AcquireLock_Handler,
 		},
@@ -323,8 +285,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// AdminService is the control plane. It is split from LockService so operators
-// can apply stronger authentication/authorization to membership changes.
+// AdminService is the control plane. It is split from LockService so cluster
+// membership operations stay separate from normal lock traffic.
 type AdminServiceClient interface {
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
 	JoinNode(ctx context.Context, in *JoinNodeRequest, opts ...grpc.CallOption) (*JoinNodeResponse, error)
@@ -373,8 +335,8 @@ func (c *adminServiceClient) RemoveNode(ctx context.Context, in *RemoveNodeReque
 // All implementations must embed UnimplementedAdminServiceServer
 // for forward compatibility.
 //
-// AdminService is the control plane. It is split from LockService so operators
-// can apply stronger authentication/authorization to membership changes.
+// AdminService is the control plane. It is split from LockService so cluster
+// membership operations stay separate from normal lock traffic.
 type AdminServiceServer interface {
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
 	JoinNode(context.Context, *JoinNodeRequest) (*JoinNodeResponse, error)

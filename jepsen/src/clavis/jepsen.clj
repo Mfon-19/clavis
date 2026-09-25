@@ -165,7 +165,7 @@
 (defn busy?
   [resp]
   (let [err (:error resp "")]
-    (or (str/includes? err "FailedPrecondition")
+    (or (str/includes? err "AlreadyExists")
         (str/includes? err "lock is already held"))))
 
 (defn field
@@ -312,46 +312,82 @@
 
 (defrecord FencedRegisterChecker []
   checker/Checker
-  (check [_ _ history _]
-    (let [accepted (loop [pending {}
-                          accepted []
-                          ops history]
-                     (if-let [op (first ops)]
-                       (let [op-key [(:process op) (:f op)]]
-                         (cond
-                          (= :invoke (:type op))
-                          (recur (assoc pending op-key op) accepted (rest ops))
+  (check [_ test history _]
+    (let [completed (loop [pending {}
+                           completed []
+                           ops history]
+                      (if-let [op (first ops)]
+                        (let [op-key [(:process op) (:f op)]]
+                          (cond
+                           (= :invoke (:type op))
+                           (recur (assoc pending op-key op) completed (rest ops))
 
-                          (and (= :ok (:type op))
-                               (= :fenced-write (:f op)))
-                          (let [started (get pending op-key)]
-                            (recur (dissoc pending op-key)
-                              (conj accepted
-                                    (assoc (:value op)
-                                           :invoke-time (:time started)
-                                           :complete-time (:time op)
-                                           :complete-index (:index op)))
-                              (rest ops)))
+                           (and (contains? #{:ok :fail} (:type op))
+                                (= :fenced-write (:f op)))
+                           (let [started (get pending op-key)]
+                             (recur (dissoc pending op-key)
+                               (conj completed
+                                     (assoc (:value op)
+                                            :result-type (:type op)
+                                            :invoke-time (:time started)
+                                            :complete-time (:time op)
+                                            :complete-index (:index op)))
+                               (rest ops)))
 
-                          :else
-                          (recur (dissoc pending op-key) accepted (rest ops))))
-                       accepted))
+                           :else
+                           (recur (dissoc pending op-key) completed (rest ops))))
+                        completed))
+          accepted (filterv #(= :ok (:result-type %)) completed)
+          stale-rejections (filterv #(and (= :fail (:result-type %))
+                                          (= :stale-token (:error %)))
+                                    completed)
+          token-results (into accepted stale-rejections)
           grouped (group-by :resource accepted)
-          violations (->> grouped
-                          (mapcat
-                           (fn [[resource ops]]
-                             (for [a ops
-                                   b ops
-                                   :when (and (not= (:complete-index a) (:complete-index b))
-                                              (not (< (:token a) (:token b)))
-                                              (< (:complete-time a) (:invoke-time b)))]
-                               {:resource resource
-                                :previous a
-                                :current b}))))
-          violations (vec violations)]
+          minimum-successes (max 1 (long (or (:min-successful-ops test) 1)))
+          missing-invocations (for [op token-results
+                                    :when (nil? (:invoke-time op))]
+                                {:type :missing-invocation
+                                 :operation op})
+          missing-tokens (for [op token-results
+                               :when (nil? (:token op))]
+                           {:type :missing-token
+                            :operation op})
+          duplicate-tokens (->> token-results
+                                (filter :token)
+                                (group-by :token)
+                                (keep (fn [[token ops]]
+                                        (when (> (count ops) 1)
+                                          {:type :duplicate-token
+                                           :token token
+                                           :operations ops}))))
+          realtime-order-violations
+          (for [a token-results
+                b token-results
+                :when (and (number? (:token a))
+                           (number? (:token b))
+                           (number? (:complete-time a))
+                           (number? (:invoke-time b))
+                           (not= (:complete-index a) (:complete-index b))
+                           (< (:complete-time a) (:invoke-time b))
+                           (not (< (:token a) (:token b))))]
+            {:type :non-monotonic-token
+             :previous a
+             :current b})
+          progress-violations
+          (when (< (count accepted) minimum-successes)
+            [{:type :insufficient-progress
+              :accepted (count accepted)
+              :minimum minimum-successes}])
+          violations (vec (concat missing-invocations
+                                  missing-tokens
+                                  duplicate-tokens
+                                  realtime-order-violations
+                                  progress-violations))]
       {:valid? (empty? violations)
        :accepted-count (count accepted)
+       :stale-rejection-count (count stale-rejections)
        :resource-count (count grouped)
+       :minimum-successful-ops minimum-successes
        :violations violations})))
 
 (defn op
@@ -542,6 +578,9 @@
    [nil "--stale-probability P" "Probability that an operation simulates a paused holder."
     :default 0.05
     :parse-fn #(Double/parseDouble %)]
+   [nil "--min-successful-ops N" "Minimum successful fenced writes required for a valid run."
+    :default 1
+    :parse-fn parse-long]
    [nil "--clock-skew-seconds SECONDS" "Clock skew magnitude applied by the clock nemesis."
     :default 30
     :parse-fn parse-long]])

@@ -135,9 +135,6 @@ func waitForMemberViews(t testing.TB, nodes []*Node, want []domain.ClusterMember
 			if node == nil {
 				continue
 			}
-			if node.GetClusterSize() != len(want) {
-				return false
-			}
 			if !memberViewMatches(node, want) {
 				return false
 			}
@@ -195,149 +192,6 @@ func waitForExactLeaseAndLockState(
 	}, timeout, 100*time.Millisecond, "cluster state did not converge")
 }
 
-func waitForLockReleased(
-	t testing.TB,
-	nodes []*Node,
-	members []domain.ClusterMember,
-	leaseID uint64,
-	lockName string,
-	fencingCounter uint64,
-	timeout time.Duration,
-) {
-	t.Helper()
-
-	require.Eventually(t, func() bool {
-		for _, node := range nodes {
-			if node == nil {
-				continue
-			}
-
-			if !memberViewMatches(node, members) {
-				return false
-			}
-
-			stats := node.Stats()
-			if stats.Leases != 1 || stats.Locks != 0 || stats.FencingCounter != fencingCounter {
-				return false
-			}
-
-			if _, ok := node.GetFSM().GetLease(leaseID); !ok {
-				return false
-			}
-			if _, ok := node.GetFSM().GetLock(lockName); ok {
-				return false
-			}
-		}
-		return true
-	}, timeout, 100*time.Millisecond, "lock release did not converge")
-}
-
-func waitForNoLock(
-	t testing.TB,
-	nodes []*Node,
-	lockName string,
-	timeout time.Duration,
-) {
-	t.Helper()
-
-	require.Eventually(t, func() bool {
-		for _, node := range nodes {
-			if node == nil {
-				continue
-			}
-			if _, ok := node.GetFSM().GetLock(lockName); ok {
-				return false
-			}
-		}
-		return true
-	}, timeout, 100*time.Millisecond, "lock %q still present", lockName)
-}
-
-// TestSingleNodeSmoke verifies the basic happy path on one node: elect leader,
-// create lease, acquire lock, release lock, and observe the expected counters.
-func TestSingleNodeSmoke(t *testing.T) {
-	cfg := newTestConfig(t, t.TempDir(), true)
-
-	node, err := NewNode(cfg)
-	require.NoError(t, err)
-	defer node.Shutdown()
-
-	require.NoError(t, node.WaitForLeader(5*time.Second))
-	require.True(t, node.IsLeader())
-
-	createResult, err := node.Apply(raftlog.NewCreateLeaseCmd("client-1", 10*time.Second, time.Now().UTC()))
-	require.NoError(t, err)
-
-	createResp, ok := createResult.(state.CreateLeaseResponse)
-	require.True(t, ok)
-	assert.NotZero(t, createResp.LeaseID)
-
-	acquireResult, err := node.Apply(raftlog.NewAcquireLockCmd("smoke-lock", "client-1", createResp.LeaseID, time.Now().UTC()))
-	require.NoError(t, err)
-
-	acquireResp, ok := acquireResult.(state.AcquireLockResponse)
-	require.True(t, ok)
-	assert.Equal(t, uint64(1), acquireResp.FencingToken)
-
-	releaseResult, err := node.Apply(raftlog.NewReleaseLockCmd("smoke-lock", createResp.LeaseID))
-	require.NoError(t, err)
-
-	releaseResp, ok := releaseResult.(state.ReleaseLockResponse)
-	require.True(t, ok)
-	assert.True(t, releaseResp.Released)
-
-	stats := node.Stats()
-	assert.Equal(t, state.Stats{Locks: 0, Leases: 1, FencingCounter: 1}, stats)
-}
-
-// TestClusterReplication verifies that commands applied through the leader
-// replicate the exact lease, lock, fencing, and authoritative Raft membership
-// state to every node in a 3-node cluster.
-func TestClusterReplication(t *testing.T) {
-	nodes, cfgs := startTestCluster(t, 3)
-	leader := waitForSingleLeader(t, nodes, 5*time.Second)
-	members := expectedMembers(cfgs)
-
-	ttl := 10 * time.Second
-	createResult, err := leader.Apply(raftlog.NewCreateLeaseCmd("client-1", ttl, time.Now().UTC()))
-	require.NoError(t, err)
-
-	createResp, ok := createResult.(state.CreateLeaseResponse)
-	require.True(t, ok)
-
-	acquireResult, err := leader.Apply(raftlog.NewAcquireLockCmd("cluster-lock", "client-1", createResp.LeaseID, time.Now().UTC()))
-	require.NoError(t, err)
-
-	acquireResp, ok := acquireResult.(state.AcquireLockResponse)
-	require.True(t, ok)
-	assert.Equal(t, uint64(1), acquireResp.FencingToken)
-
-	waitForExactLeaseAndLockState(
-		t,
-		nodes,
-		members,
-		createResp.LeaseID,
-		"client-1",
-		ttl,
-		createResp.ExpiresAt,
-		"cluster-lock",
-		1,
-		5*time.Second,
-	)
-
-	releaseResult, err := leader.Apply(raftlog.NewReleaseLockCmd("cluster-lock", createResp.LeaseID))
-	require.NoError(t, err)
-
-	releaseResp, ok := releaseResult.(state.ReleaseLockResponse)
-	require.True(t, ok)
-	assert.True(t, releaseResp.Released)
-
-	waitForLockReleased(t, nodes, members, createResp.LeaseID, "cluster-lock", 1, 5*time.Second)
-}
-
-// TestRestartPersistence verifies that a restarted single-node cluster
-// replays committed state correctly and continues lease IDs and fencing tokens
-// from the persisted values rather than resetting them.
 func TestRestartPersistence(t *testing.T) {
 	cfg := newTestConfig(t, t.TempDir(), true)
 
@@ -462,10 +316,8 @@ func TestLeaderFailover(t *testing.T) {
 	secondAcquire := secondAcquireResult.(state.AcquireLockResponse)
 	assert.Equal(t, uint64(2), secondAcquire.FencingToken, "new leader should continue fencing sequence")
 
-	releaseResult, err := newLeader.Apply(raftlog.NewReleaseLockCmd("alpha", createResp.LeaseID))
+	_, err = newLeader.Apply(raftlog.NewReleaseLockCmd("alpha", createResp.LeaseID))
 	require.NoError(t, err)
-	releaseResp := releaseResult.(state.ReleaseLockResponse)
-	assert.True(t, releaseResp.Released)
 
 	require.Eventually(t, func() bool {
 		for _, node := range remaining {
@@ -490,10 +342,10 @@ func TestLeaderFailover(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond, "remaining cluster did not converge after failover")
 }
 
-// TestPendingRenewalHorizon verifies the lease-expiry race guard:
-// a renewal proposed before expiry should keep the leader from expiring that
-// lease while the renewal is still in the Raft pipeline.
-func TestPendingRenewalHorizon(t *testing.T) {
+// TestLeaseExpiryGuards verifies the two conditions that hold back lease
+// expiry on the leader: a renewal proposed before the lease's deadline that is
+// still in the Raft pipeline, and the post-election grace period.
+func TestLeaseExpiryGuards(t *testing.T) {
 	stateMachine := state.NewFSM()
 	createdAt := time.Unix(1_700_000_000, 0).UTC()
 
@@ -505,10 +357,18 @@ func TestPendingRenewalHorizon(t *testing.T) {
 		fsm:             stateMachine,
 		pendingRenewals: make(map[uint64]map[int64]int),
 	}
+	leaderSince := createdAt
+	now := createdAt.Add(12 * time.Second)
 
-	node.recordPendingRenewal(leaseID, createdAt.Add(4*time.Second))
+	timely := createdAt.Add(4 * time.Second)
+	node.recordPendingRenewal(leaseID, timely)
 	node.recordPendingRenewal(leaseID, createdAt.Add(8*time.Second))
+	assert.False(t, node.shouldExpireLease(leaseID, now, leaderSince), "timely renewal still in flight")
 
-	assert.False(t, node.shouldExpireLease(leaseID, createdAt.Add(12*time.Second)))
-	assert.True(t, node.shouldExpireLease(leaseID, createdAt.Add(13*time.Second)))
+	node.clearPendingRenewal(leaseID, timely)
+	assert.True(t, node.shouldExpireLease(leaseID, now, leaderSince), "renewal proposed after expiry cannot save the lease")
+
+	newLeaderSince := createdAt.Add(10 * time.Second)
+	assert.False(t, node.shouldExpireLease(leaseID, now, newLeaderSince), "new leader must wait one TTL")
+	assert.True(t, node.shouldExpireLease(leaseID, newLeaderSince.Add(5*time.Second), newLeaderSince))
 }

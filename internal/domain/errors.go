@@ -16,10 +16,6 @@ var (
 	ErrLockNotFound    = errors.New("lock not found")
 	ErrLockAlreadyHeld = errors.New("lock is already held by another client")
 	ErrNotLockOwner    = errors.New("caller is not the lock owner")
-	ErrInvalidLeaseID  = errors.New("invalid lease ID")
-
-	// ErrStaleToken means a fencing token is older than the current holder's token.
-	ErrStaleToken = errors.New("fencing token is stale")
 
 	// Cluster membership errors
 	ErrNodeNotFound       = errors.New("cluster node not found")

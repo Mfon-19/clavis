@@ -115,7 +115,7 @@ func (n *Node) Members() []domain.ClusterMember {
 // leader after failover without relying on local seed lists.
 func (n *Node) AddClusterMember(member domain.ClusterMember) error {
 	if !n.IsLeader() {
-		return fmt.Errorf("cannot add cluster member: not leader")
+		return fmt.Errorf("cannot add cluster member: %w", raft.ErrNotLeader)
 	}
 
 	if member.NodeID == "" || member.RaftAddress == "" || member.GRPCAddress == "" {
@@ -153,7 +153,7 @@ func (n *Node) AddClusterMember(member domain.ClusterMember) error {
 // because Members() always derives the active set from Raft config first.
 func (n *Node) RemoveClusterMember(nodeID string) error {
 	if !n.IsLeader() {
-		return fmt.Errorf("cannot remove cluster member: not leader")
+		return fmt.Errorf("cannot remove cluster member: %w", raft.ErrNotLeader)
 	}
 
 	configFuture := n.raft.GetConfiguration()

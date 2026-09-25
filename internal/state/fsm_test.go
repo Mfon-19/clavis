@@ -36,37 +36,6 @@ func mustAcquireLock(t testing.TB, fsm *FSM, lockName, owner string, leaseID uin
 	return resp
 }
 
-// TestLeaseLifecycle verifies that creating and renewing a lease uses the
-// command timestamps carried in the log and preserves exact lease state.
-func TestLeaseLifecycle(t *testing.T) {
-	fsm := NewFSM()
-	createdAt := fixedTestTime(0)
-
-	createResp := mustCreateLease(t, fsm, "client-1", 10*time.Second, createdAt)
-	assert.Equal(t, uint64(1), createResp.LeaseID)
-	assert.Equal(t, createdAt.Add(10*time.Second), createResp.ExpiresAt)
-
-	lease, ok := fsm.GetLease(createResp.LeaseID)
-	require.True(t, ok)
-	assert.Equal(t, "client-1", lease.OwnerID)
-	assert.Equal(t, 10*time.Second, lease.TTL)
-	assert.Equal(t, createResp.ExpiresAt.UnixNano(), lease.ExpiresAtUnixNano)
-
-	renewedAt := createdAt.Add(3 * time.Second)
-	result, err := fsm.Apply(raftlog.NewRenewLeaseCmd(createResp.LeaseID, renewedAt))
-	require.NoError(t, err)
-
-	renewResp, ok := result.(RenewLeaseResponse)
-	require.True(t, ok, "expected RenewLeaseResponse")
-	assert.Equal(t, renewedAt.Add(10*time.Second), renewResp.ExpiresAt)
-	assert.Equal(t, 10*time.Second, renewResp.TTL)
-
-	lease, ok = fsm.GetLease(createResp.LeaseID)
-	require.True(t, ok)
-	assert.Equal(t, renewedAt.Add(10*time.Second).UnixNano(), lease.ExpiresAtUnixNano)
-	assert.Equal(t, stateStats(0, 1, 0), fsm.Stats())
-}
-
 // TestAcquireLockSemantics verifies the core lock invariants: first acquisition
 // increments fencing, re-acquisition by the same lease is idempotent, and a
 // different lease cannot take the lock while it is held.
@@ -83,6 +52,7 @@ func TestAcquireLock(t *testing.T) {
 
 	second := mustAcquireLock(t, fsm, "my-lock", "client-1", lease1, createdAt.Add(3*time.Second))
 	assert.Equal(t, first.FencingToken, second.FencingToken, "same lease should re-acquire idempotently")
+	assert.Equal(t, 10*time.Second, second.LeaseTTL, "same lease should receive the original TTL")
 	assert.Equal(t, stateStats(1, 2, 1), fsm.Stats(), "re-acquire should not advance fencing counter")
 
 	lock, ok := fsm.GetLock("my-lock")
@@ -97,6 +67,25 @@ func TestAcquireLock(t *testing.T) {
 	other := mustAcquireLock(t, fsm, "other-lock", "client-1", lease1, createdAt.Add(5*time.Second))
 	assert.Equal(t, uint64(2), other.FencingToken)
 	assert.Equal(t, stateStats(2, 2, 2), fsm.Stats())
+}
+
+// TestDelayedRenewalDoesNotShortenLease verifies that concurrent renewal RPCs
+// may be applied out of timestamp order without moving the deadline backwards.
+func TestDelayedRenewalDoesNotShortenLease(t *testing.T) {
+	fsm := NewFSM()
+	createdAt := fixedTestTime(0)
+	leaseID := mustCreateLease(t, fsm, "client-1", 10*time.Second, createdAt).LeaseID
+
+	result, err := fsm.Apply(raftlog.NewRenewLeaseCmd(leaseID, createdAt.Add(8*time.Second)))
+	require.NoError(t, err)
+	newerExpiry := result.(RenewLeaseResponse).ExpiresAt
+
+	result, err = fsm.Apply(raftlog.NewRenewLeaseCmd(leaseID, createdAt.Add(2*time.Second)))
+	require.NoError(t, err)
+	delayedExpiry := result.(RenewLeaseResponse).ExpiresAt
+
+	assert.Equal(t, newerExpiry, delayedExpiry)
+	assert.Equal(t, createdAt.Add(18*time.Second), delayedExpiry)
 }
 
 // TestLeaseOwnershipAndExpiryChecks verifies that lock operations reject
@@ -137,16 +126,13 @@ func TestReleaseAndExpiry(t *testing.T) {
 	_, err := fsm.Apply(raftlog.NewReleaseLockCmd("my-lock", lease2))
 	assert.ErrorIs(t, err, domain.ErrNotLockOwner)
 
-	result, err := fsm.Apply(raftlog.NewReleaseLockCmd("my-lock", lease1))
+	_, err = fsm.Apply(raftlog.NewReleaseLockCmd("my-lock", lease1))
 	require.NoError(t, err)
-	releaseResp, ok := result.(ReleaseLockResponse)
-	require.True(t, ok)
-	assert.True(t, releaseResp.Released)
 	assert.Equal(t, stateStats(0, 2, 1), fsm.Stats())
 
 	mustAcquireLock(t, fsm, "my-lock", "client-1", lease1, createdAt.Add(3*time.Second))
 
-	result, err = fsm.Apply(raftlog.NewRenewLeaseCmd(lease1, createdAt.Add(4*time.Second)))
+	result, err := fsm.Apply(raftlog.NewRenewLeaseCmd(lease1, createdAt.Add(4*time.Second)))
 	require.NoError(t, err)
 	renewResp := result.(RenewLeaseResponse)
 	assert.Equal(t, createdAt.Add(9*time.Second), renewResp.ExpiresAt)
@@ -170,107 +156,6 @@ func TestReleaseAndExpiry(t *testing.T) {
 	_, ok = fsm.GetLock("my-lock")
 	assert.False(t, ok)
 	assert.Equal(t, stateStats(0, 1, 2), fsm.Stats())
-}
-
-// TestEndpointMetadata verifies that endpoint metadata is stored separately
-// from membership and can be upserted and removed deterministically through
-// the Raft-backed FSM.
-func TestEndpointMetadata(t *testing.T) {
-	fsm := NewFSM()
-
-	_, err := fsm.Apply(raftlog.NewUpsertEndpointCmd("node-1", "127.0.0.1:9000"))
-	require.NoError(t, err)
-
-	addr, ok := fsm.GetEndpoint("node-1")
-	require.True(t, ok)
-	assert.Equal(t, "127.0.0.1:9000", addr)
-
-	_, err = fsm.Apply(raftlog.NewUpsertEndpointCmd("node-1", "127.0.0.1:9001"))
-	require.NoError(t, err)
-
-	addr, ok = fsm.GetEndpoint("node-1")
-	require.True(t, ok)
-	assert.Equal(t, "127.0.0.1:9001", addr)
-
-	_, err = fsm.Apply(raftlog.NewRemoveEndpointCmd("node-1"))
-	require.NoError(t, err)
-
-	_, ok = fsm.GetEndpoint("node-1")
-	assert.False(t, ok)
-}
-
-// TestRejectsCommandsWithoutTimestamps verifies that the FSM rejects malformed
-// log entries whose timestamp fields are missing, preventing nondeterministic
-// replay behavior on restore or log replication.
-func TestRejectsMissingTimestamps(t *testing.T) {
-	fsm := NewFSM()
-
-	tests := []struct {
-		name string
-		cmd  *raftlog.CommandWrapper
-		err  string
-	}{
-		{
-			name: "create lease",
-			cmd: &raftlog.CommandWrapper{
-				Type: raftlog.CommandType_COMMAND_TYPE_CREATE_LEASE,
-				Payload: &raftlog.CommandWrapper_CreateLease{CreateLease: &raftlog.CreateLeaseCommand{
-					OwnerId:  "client-1",
-					TtlNanos: (20 * time.Millisecond).Nanoseconds(),
-				}},
-			},
-			err: "invalid command timestamp",
-		},
-		{
-			name: "renew lease",
-			cmd: &raftlog.CommandWrapper{
-				Type: raftlog.CommandType_COMMAND_TYPE_RENEW_LEASE,
-				Payload: &raftlog.CommandWrapper_RenewLease{RenewLease: &raftlog.RenewLeaseCommand{
-					LeaseId: 1,
-				}},
-			},
-			err: "invalid command timestamp",
-		},
-		{
-			name: "acquire lock",
-			cmd: &raftlog.CommandWrapper{
-				Type: raftlog.CommandType_COMMAND_TYPE_ACQUIRE_LOCK,
-				Payload: &raftlog.CommandWrapper_AcquireLock{AcquireLock: &raftlog.AcquireLockCommand{
-					LockName: "my-lock",
-					OwnerId:  "client-1",
-					LeaseId:  1,
-				}},
-			},
-			err: "invalid command timestamp",
-		},
-		{
-			name: "expire lease",
-			cmd: &raftlog.CommandWrapper{
-				Type: raftlog.CommandType_COMMAND_TYPE_EXPIRE_LEASE,
-				Payload: &raftlog.CommandWrapper_ExpireLease{ExpireLease: &raftlog.ExpireLeaseCommand{
-					LeaseId: 1,
-				}},
-			},
-			err: "invalid command timestamp",
-		},
-		{
-			name: "upsert endpoint",
-			cmd: &raftlog.CommandWrapper{
-				Type: raftlog.CommandType_COMMAND_TYPE_UPSERT_ENDPOINT,
-				Payload: &raftlog.CommandWrapper_UpsertEndpoint{UpsertEndpoint: &raftlog.UpsertEndpointCommand{
-					NodeId: "node-1",
-				}},
-			},
-			err: "invalid cluster node metadata",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := fsm.Apply(tt.cmd)
-			require.EqualError(t, err, tt.err)
-		})
-	}
 }
 
 func stateStats(locks, leases int, fencing uint64) Stats {

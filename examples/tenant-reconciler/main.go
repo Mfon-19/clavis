@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,8 +14,6 @@ import (
 	"time"
 
 	"github.com/Mfon-19/clavis/pkg/client"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func main() {
@@ -45,7 +44,7 @@ func reconcileTenant(ctx context.Context, c *client.Client, tenantID string) err
 	if err != nil {
 		// Busy is not exceptional in this pattern. Another worker may already be
 		// responsible for this tenant, so we skip it and move on.
-		if status.Code(err) == codes.FailedPrecondition {
+		if errors.Is(err, client.ErrLockHeld) {
 			return fmt.Errorf("another worker is already reconciling this tenant")
 		}
 		return err

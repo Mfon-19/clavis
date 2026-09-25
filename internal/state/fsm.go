@@ -71,6 +71,7 @@ func (f *FSM) Apply(cmd *raftlog.CommandWrapper) (any, error) {
 type CreateLeaseResponse struct {
 	LeaseID   uint64
 	ExpiresAt tm.Time
+	TTL       tm.Duration
 }
 
 func (f *FSM) applyCreateLease(cmd *raftlog.CreateLeaseCommand) (any, error) {
@@ -84,13 +85,16 @@ func (f *FSM) applyCreateLease(cmd *raftlog.CreateLeaseCommand) (any, error) {
 		return nil, err
 	}
 
-	leaseID := f.nextLeaseID
-	f.nextLeaseID++
-
 	// Expiry is computed from the timestamp carried in the Raft log entry, not
 	// from each node's local clock at apply time. That keeps replay deterministic
 	// across followers and restarts.
-	expiresAt := createdAt.Add(ttl)
+	expiresAt, err := leaseExpiryAt(createdAt, ttl)
+	if err != nil {
+		return nil, err
+	}
+
+	leaseID := f.nextLeaseID
+	f.nextLeaseID++
 
 	lease := &domain.Lease{
 		LeaseID:           leaseID,
@@ -104,6 +108,7 @@ func (f *FSM) applyCreateLease(cmd *raftlog.CreateLeaseCommand) (any, error) {
 	return CreateLeaseResponse{
 		LeaseID:   leaseID,
 		ExpiresAt: expiresAt,
+		TTL:       ttl,
 	}, nil
 }
 
@@ -131,7 +136,16 @@ func (f *FSM) applyRenewLease(cmd *raftlog.RenewLeaseCommand) (any, error) {
 		return nil, domain.ErrLeaseExpired
 	}
 
-	lease.ExpiresAtUnixNano = renewedAt.Add(lease.TTL).UnixNano()
+	// A delayed renewal may be applied after a newer one when concurrent RPCs
+	// reach Raft in a different order than their proposal timestamps. Never let
+	// that older proposal move the lease deadline backwards.
+	proposedExpiry, err := leaseExpiryAt(renewedAt, lease.TTL)
+	if err != nil {
+		return nil, err
+	}
+	if proposedExpiry.After(lease.ExpiresAt()) {
+		lease.ExpiresAtUnixNano = proposedExpiry.UnixNano()
+	}
 
 	return RenewLeaseResponse{
 		ExpiresAt: lease.ExpiresAt(),
@@ -171,6 +185,7 @@ func (f *FSM) applyAcquireLock(cmd *raftlog.AcquireLockCommand) (any, error) {
 		if existingLock.LeaseID == cmd.GetLeaseId() {
 			return AcquireLockResponse{
 				FencingToken: existingLock.FencingToken,
+				LeaseTTL:     lease.TTL,
 			}, nil
 		}
 		// Held by a different lease, cannot acquire
@@ -198,10 +213,6 @@ func (f *FSM) applyAcquireLock(cmd *raftlog.AcquireLockCommand) (any, error) {
 	}, nil
 }
 
-type ReleaseLockResponse struct {
-	Released bool
-}
-
 func (f *FSM) applyReleaseLock(cmd *raftlog.ReleaseLockCommand) (any, error) {
 	lock, held := f.locks[cmd.GetLockName()]
 	if !held {
@@ -213,10 +224,7 @@ func (f *FSM) applyReleaseLock(cmd *raftlog.ReleaseLockCommand) (any, error) {
 	}
 
 	delete(f.locks, cmd.GetLockName())
-
-	return ReleaseLockResponse{
-		Released: true,
-	}, nil
+	return nil, nil
 }
 
 type ExpireLeaseResponse struct {
@@ -281,18 +289,12 @@ func (f *FSM) GetLock(lockName string) (*domain.Lock, bool) {
 	defer f.mu.RUnlock()
 
 	lock, exists := f.locks[lockName]
-	return lock, exists
-}
-
-func (f *FSM) LockState(lockName string) (bool, uint64) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	lock, exists := f.locks[lockName]
 	if !exists {
-		return false, 0
+		return nil, false
 	}
-	return true, lock.FencingToken
+
+	lockCopy := *lock
+	return &lockCopy, true
 }
 
 func (f *FSM) GetLease(leaseID uint64) (*domain.Lease, bool) {
@@ -300,7 +302,12 @@ func (f *FSM) GetLease(leaseID uint64) (*domain.Lease, bool) {
 	defer f.mu.RUnlock()
 
 	lease, exists := f.leases[leaseID]
-	return lease, exists
+	if !exists {
+		return nil, false
+	}
+
+	leaseCopy := *lease
+	return &leaseCopy, true
 }
 
 func (f *FSM) GetEndpoint(nodeID string) (string, bool) {
@@ -347,7 +354,15 @@ func (f *FSM) GetExpiredLeases(now tm.Time) []uint64 {
 
 func commandTime(unixNano int64) (tm.Time, error) {
 	if unixNano <= 0 {
-		return tm.Time{}, fmt.Errorf("invalid command timestamp")
+		return tm.Time{}, domain.ErrInvalidTimestamp
 	}
 	return tm.Unix(0, unixNano).UTC(), nil
+}
+
+func leaseExpiryAt(start tm.Time, ttl tm.Duration) (tm.Time, error) {
+	maxExpiryNanos := int64(1<<63-1) - start.UnixNano()
+	if ttl <= 0 || maxExpiryNanos <= 0 || ttl > tm.Duration(maxExpiryNanos) {
+		return tm.Time{}, domain.ErrInvalidLeaseTTL
+	}
+	return start.Add(ttl), nil
 }

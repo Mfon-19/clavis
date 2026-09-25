@@ -215,6 +215,42 @@ make test
 
 This includes FSM invariant tests, snapshot/restore tests, and Porcupine linearizability checks that run concurrent clients against a 3-node in-process cluster and verify the history is consistent with a sequential specification.
 
+### Benchmarks
+
+`cmd/clavis-bench` measures the system end to end through the Go SDK and reports percentiles:
+
+| Scenario | Measures |
+|---|---|
+| `latency` | Acquire and release latency for one uncontended client |
+| `throughput` | Lock cycles per second with 1, 8, and 64 clients on distinct locks |
+| `handoff` | How quickly a contended lock passes between waiting clients, and how unevenly |
+| `sessions` | Lock latency as idle heartbeating sessions add Raft write load |
+| `failover` | Time until clients succeed again after the Raft leader crashes, and sessions lost |
+| `handover` | Time for a waiter to get a lock after its holder crashes without releasing |
+
+```bash
+make bench                                      # every scenario, about 2.5 minutes
+go run ./cmd/clavis-bench latency failover      # a subset
+go run ./cmd/clavis-bench --seeds host1:9000,host2:9000,host3:9000   # a real cluster
+```
+
+By default each scenario gets a fresh in-process 3-node cluster, so every node shares one machine and one disk. Commit latency is dominated by disk syncs (on macOS, bbolt's `F_FULLFSYNC`), so run against a real cluster with `--seeds` for numbers that mean anything in production. Run `go run ./cmd/clavis-bench -h` for all flags.
+
+#### Results
+
+In-process 3-node cluster, Apple M4 laptop, default flags:
+
+| Scenario | Result |
+|---|---|
+| latency | acquire p50 **20ms**, p99 29ms |
+| throughput | **19 / 50 / 337** cycles/s at 1 / 8 / 64 clients |
+| handoff | p50 45ms, max 715ms; wins per client ranged 8–44 |
+| sessions | lock p99 **68ms → 1.15s** from 0 to 2,500 idle sessions; none lost |
+| failover | clients recover **1.7–3.5s** after a leader crash; 0/8 sessions lost |
+| handover | waiter gets the lock **2.4–3.6s** after a crash (3s TTL) |
+
+Latency is mostly disk syncs: macOS `F_FULLFSYNC` makes each commit about 10ms per node.
+
 ### Jepsen Tests
 
 Clavis includes a [Jepsen](https://jepsen.io) test suite that runs a fenced register workload under network partitions, node crashes, and clock skew. The checker verifies that fencing token invariants hold even under fault injection.

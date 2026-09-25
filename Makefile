@@ -20,6 +20,9 @@ proto:
 test:
 	go test ./...
 
+bench:
+	go run ./cmd/clavis-bench
+
 jepsen-build:
 	GOOS=linux GOARCH=arm64 go build -o $(JEPSEN_BINARY) ./cmd/clavis
 

@@ -18,6 +18,12 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func main() {
+	// raft-wal imports etcd's fileutil, whose logging package redirects the
+	// standard logger to journald on systemd hosts when it initializes. Keep
+	// our logs on stderr with the rest of the node's output.
+	log.SetOutput(os.Stderr)
+	log.SetFlags(log.LstdFlags)
+
 	var (
 		nodeID            = flag.String("node-id", "", "Unique node ID (generates UUID if empty)")
 		raftAddr          = flag.String("raft-addr", "127.0.0.1:7000", "Raft bind address")

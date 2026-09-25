@@ -1,4 +1,4 @@
-.PHONY: proto test bench jepsen-build jepsen-test jepsen-help jepsen-run
+.PHONY: proto test bench jepsen-build jepsen-holder jepsen-test jepsen-help jepsen-run
 
 JEPSEN_DIR := jepsen
 JEPSEN_BINARY := ./clavis
@@ -26,13 +26,16 @@ bench:
 jepsen-build:
 	GOOS=linux GOARCH=arm64 go build -o $(JEPSEN_BINARY) ./cmd/clavis
 
+jepsen-holder:
+	go build -o $(JEPSEN_DIR)/clavis-holder ./jepsen/holder
+
 jepsen-test:
 	cd $(JEPSEN_DIR) && lein test
 
 jepsen-help:
 	cd $(JEPSEN_DIR) && lein run -- test --help
 
-jepsen-run:
+jepsen-run: jepsen-holder
 	cd $(JEPSEN_DIR) && lein run -- test \
 	  --nodes $(JEPSEN_NODES) \
 	  --username $(JEPSEN_USER) \

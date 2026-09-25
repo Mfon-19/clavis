@@ -1,10 +1,20 @@
 # Clavis Jepsen
 
-This folder contains the Jepsen harness for Clavis's fenced coordination API.
-The workload acquires a lock, gets a fencing token, and attempts a fenced write
-into a downstream register. The checker validates that accepted tokens are
-strictly increasing per resource even under partitions, restarts, pauses, and
-clock skew.
+This folder contains the Jepsen harness for Clavis. Each operation is one
+client, built on the Go SDK in [`holder/`](holder/), that opens a heartbeating
+session, acquires a lock (sometimes waiting in line for it), holds it, and then
+makes a fenced write to a downstream register. Some holds outlast the lease
+TTL, so they depend on renewals; some clients stall long enough for their lease
+to expire before they write.
+
+The checker fails the run if, under partitions, restarts, pauses, and clock
+skew:
+
+- two clients held the same lock at overlapping times, by their own
+  confirmation that their session was alive,
+- a client that had just confirmed it held a lock was fenced out,
+- a fencing token was issued twice, or
+- an operation that started after another finished got a lower token.
 
 ## Prerequisites
 
@@ -12,7 +22,6 @@ Install these tools on the controller machine:
 
 - Go
 - Leiningen (`lein`)
-- `grpcurl`
 - Multipass (for local disposable Ubuntu VMs)
 
 You also need a Linux `arm64` binary because the local Multipass VMs on Apple
@@ -92,6 +101,9 @@ make jepsen-run \
 
 - `make jepsen-build`
   Builds `./clavis` for Linux `arm64`.
+- `make jepsen-holder`
+  Builds the Jepsen client for the controller machine. `make jepsen-run` does
+  this for you.
 - `make jepsen-test`
   Runs the Clojure unit tests for the Jepsen harness.
 - `make jepsen-help`
@@ -104,11 +116,15 @@ make jepsen-run \
 - The harness uses the `ubuntu` SSH user and runs privileged remote commands
   through `sudo`.
 - The default workload enables partitions, restarts, pauses, and clock skew.
-- Results are written under `jepsen/store/`.
-- A successful run should end with a checker result like:
+- Results are written under `jepsen/store/`, and the clients' SDK logs go to
+  `jepsen/store/holder.log`.
+- Clavis measures lease time with Go's monotonic clock, so clock skew is
+  expected to have no effect. The skew nemesis guards against that changing.
+- A successful run ends with a checker result like:
 
 ```clojure
-{:valid? true, :accepted-count 192, :resource-count 3, :violations []}
+{:valid? true, :accepted-count 102, :stale-rejection-count 3, :held-count 98,
+ :lost-count 0, :resource-count 3, :minimum-successful-ops 1, :violations []}
 ```
 
 ## Cleanup

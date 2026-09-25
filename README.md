@@ -246,11 +246,11 @@ In-process 3-node cluster, Apple M4 laptop, default flags:
 
 | Scenario | Result |
 |---|---|
-| latency | acquire p50 **9.9ms**, p99 16ms |
-| throughput | **49 / 89 / 531** cycles/s at 1 / 8 / 64 clients |
-| handoff | p50 18ms, max **30ms**; wins per client ranged 66–67 |
-| sessions | lock p99 stays **24–29ms** from 0 to 2,500 idle sessions; none lost |
-| failover | clients recover **2.1–4.3s** after a leader crash; 0/8 sessions lost |
+| latency | acquire p50 **9.4ms**, p99 15ms |
+| throughput | **51 / 89 / 630** cycles/s at 1 / 8 / 64 clients |
+| handoff | p50 18ms, max **29ms**; wins per client ranged 65–66 |
+| sessions | lock p50 stays **19–22ms** from 0 to 2,500 idle sessions (p99 30–122ms); none lost |
+| failover | clients recover **2.2–2.4s** after a leader crash; 0/8 sessions lost |
 | handover | waiter gets the lock **2.1–2.7s** after a crash (3s TTL) |
 
 Latency is mostly disk syncs: each commit waits for one sync on the leader and one on a follower, about 4–5ms each with macOS `F_FULLFSYNC`.

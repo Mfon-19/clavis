@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -82,16 +83,16 @@ func (r *historyRecorder) snapshot() []porcupine.Operation {
 	return ops
 }
 
-// TestLinearizabilityWithFailover runs concurrent acquire/release cycles and kills
-// the leader mid-test to verify that lock operations remain linearizable
-// across a leader election.
+// TestLinearizabilityWithFailover runs clients that contend for one lock
+// continuously, acquiring, holding briefly, and releasing with random pauses,
+// and kills the leader partway through. The history must stay linearizable
+// across the election, and the crash must land while operations are in flight.
 func TestLinearizabilityWithFailover(t *testing.T) {
 	nodes, leader := newPorcupineCluster(t, 3)
 	defer shutDownNodes(t, nodes)
 
 	const (
 		clients = 3
-		phases  = 8
 		lock    = "porcupine:failover-lock"
 	)
 
@@ -107,84 +108,77 @@ func TestLinearizabilityWithFailover(t *testing.T) {
 	}
 
 	recorder := newHistoryRecorder()
-	failoverStarted := make(chan struct{})
-	failoverErrCh := make(chan error, 1)
+	stop := make(chan struct{})
+	errCh := make(chan error, clients)
+	var wg sync.WaitGroup
 
-	go func(oldLeader *cluster.Node) {
-		<-failoverStarted
-		time.Sleep(5 * time.Millisecond)
+	for i := 0; i < clients; i++ {
+		wg.Add(1)
+		go func(clientID int) {
+			defer wg.Done()
+			jitter := func(max time.Duration) { time.Sleep(rand.N(max)) }
 
-		if err := oldLeader.Shutdown(); err != nil {
-			failoverErrCh <- fmt.Errorf("shutdown leader: %w", err)
-			return
-		}
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
 
-		if _, err := waitForLeaderService(nodes, 10*time.Second); err != nil {
-			failoverErrCh <- fmt.Errorf("wait for new leader: %w", err)
-			return
-		}
-
-		failoverErrCh <- nil
-	}(leader)
-
-	for phase := 0; phase < phases; phase++ {
-		start := make(chan struct{})
-		var wg sync.WaitGroup
-		errCh := make(chan error, clients)
-
-		for i := 0; i < clients; i++ {
-			wg.Add(1)
-			go func(clientID int) {
-				defer wg.Done()
-				<-start
-
-				input := lockOp{Kind: "acquire", ClientID: clientID}
 				callAt := recorder.sinceStart()
 				resp, busy, err := acquireWithLeaderRetry(nodes, lock, owners[clientID], leases[clientID], 10*time.Second)
 				returnAt := recorder.sinceStart()
 				if err != nil {
-					errCh <- fmt.Errorf("acquire client %d phase %d: %w", clientID, phase, err)
+					errCh <- fmt.Errorf("acquire client %d: %w", clientID, err)
 					return
 				}
+				input := lockOp{Kind: "acquire", ClientID: clientID}
 				if busy {
 					recorder.record(clientID, input, callAt, lockResult{Kind: "busy"}, returnAt)
-					return
+					jitter(5 * time.Millisecond)
+					continue
 				}
+				recorder.record(clientID, input, callAt, lockResult{Kind: "ok", Token: resp.FencingToken}, returnAt)
 
-				recorder.record(clientID, input, callAt, lockResult{
-					Kind:  "ok",
-					Token: resp.FencingToken,
-				}, returnAt)
+				jitter(15 * time.Millisecond)
 
-				time.Sleep(15 * time.Millisecond)
-
-				releaseInput := lockOp{Kind: "release", ClientID: clientID}
-				releaseCallAt := recorder.sinceStart()
+				callAt = recorder.sinceStart()
 				err = releaseWithLeaderRetry(nodes, lock, leases[clientID], 10*time.Second)
-				releaseReturnAt := recorder.sinceStart()
+				returnAt = recorder.sinceStart()
 				if err != nil {
-					errCh <- fmt.Errorf("release client %d phase %d: %w", clientID, phase, err)
+					errCh <- fmt.Errorf("release client %d: %w", clientID, err)
 					return
 				}
+				recorder.record(clientID, lockOp{Kind: "release", ClientID: clientID}, callAt, lockResult{Kind: "released"}, returnAt)
 
-				recorder.record(clientID, releaseInput, releaseCallAt, lockResult{Kind: "released"}, releaseReturnAt)
-			}(i)
-		}
-
-		close(start)
-		if phase == 1 {
-			close(failoverStarted)
-		}
-
-		wg.Wait()
-		close(errCh)
-		for err := range errCh {
-			require.NoError(t, err)
-		}
+				jitter(10 * time.Millisecond)
+			}
+		}(i)
 	}
 
-	require.NoError(t, <-failoverErrCh)
-	assertLinearizable(t, recorder.snapshot())
+	time.Sleep(300 * time.Millisecond)
+	crashAt := recorder.sinceStart()
+	require.NoError(t, leader.Shutdown())
+	_, err := waitForLeaderService(nodes, 10*time.Second)
+	require.NoError(t, err, "wait for new leader")
+	time.Sleep(300 * time.Millisecond)
+
+	close(stop)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	history := recorder.snapshot()
+	spanned := 0
+	for _, op := range history {
+		if op.Call < crashAt && crashAt < op.Return {
+			spanned++
+		}
+	}
+	require.Positive(t, spanned, "no operation was in flight when the leader crashed")
+	assertLinearizable(t, history)
 }
 
 // lockLinearizabilityModel defines the sequential specification of a single lock.
@@ -279,13 +273,13 @@ func assertLinearizable(t *testing.T, history []porcupine.Operation) {
 	t.Helper()
 
 	result, info := porcupine.CheckOperationsVerbose(lockLinearizabilityModel(), history, 0)
-	visualizationPath := filepath.Join("tmp", t.Name()+".html")
-	require.NoError(t, os.MkdirAll(filepath.Dir(visualizationPath), 0o755))
-	require.NoError(t, porcupine.VisualizePath(lockLinearizabilityModel(), info, visualizationPath))
 	if result == porcupine.Ok {
 		return
 	}
 
+	visualizationPath := filepath.Join("tmp", t.Name()+".html")
+	require.NoError(t, os.MkdirAll(filepath.Dir(visualizationPath), 0o755))
+	require.NoError(t, porcupine.VisualizePath(lockLinearizabilityModel(), info, visualizationPath))
 	switch result {
 	case porcupine.Illegal:
 		t.Fatalf("history is not linearizable. visualization written to %s", visualizationPath)
@@ -402,19 +396,27 @@ func acquireWithLeaderRetry(nodes []*cluster.Node, lockName, owner string, lease
 	return state.AcquireLockResponse{}, false, fmt.Errorf("acquire time out waiting for stable leader")
 }
 
-// releaseWithLeaderRetry retries ReleaseLock across leader elections  until it
-// succeeds or times out
+// releaseWithLeaderRetry retries ReleaseLock across leader elections until it
+// succeeds or times out. Only the holder releases, so if a retry finds the
+// lock gone or held by someone else, an earlier attempt committed even though
+// its reply was lost to the failover.
 func releaseWithLeaderRetry(nodes []*cluster.Node, lockName string, leaseID uint64, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	attempted := false
 	for time.Now().Before(deadline) {
 		service, err := waitForLeaderService(nodes, 250*time.Millisecond)
 		if err != nil {
 			continue
 		}
 
-		if err := service.ReleaseLock(lockName, leaseID); err == nil {
+		err = service.ReleaseLock(lockName, leaseID)
+		if err == nil {
 			return nil
 		}
+		if attempted && (errors.Is(err, domain.ErrLockNotFound) || errors.Is(err, domain.ErrNotLockOwner)) {
+			return nil
+		}
+		attempted = true
 
 		time.Sleep(25 * time.Millisecond)
 	}

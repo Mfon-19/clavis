@@ -249,55 +249,78 @@ func (r *resolver) discoverLeader(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("discover leader: %w", lastErr)
 }
 
+// attemptTimeout bounds one call to one node, so an unresponsive node, such
+// as a paused process that still accepts connections, does not use up the
+// caller's time. It exceeds the server's five-second Raft apply timeout.
+var attemptTimeout = 6 * time.Second
+
+// failoverBudget bounds how long callWithFailover keeps retrying when the
+// caller's context has no deadline. It covers several Raft elections.
+const failoverBudget = 10 * time.Second
+
 // callWithFailover executes on SDK RPC against the cluster with automatic
 // leader chasing. This function is generic so Acquire, Release, CreateLease,
-// and Status all share the same retry behaviour
+// and Status all share the same retry behaviour.
+//
+// While no node can serve the call, typically during a Raft election when
+// every node answers "not leader" without a hint, it backs off and tries
+// again until ctx is done, or for failoverBudget if ctx has no deadline.
 func callWithFailover[T any](
 	c *Client,
 	ctx context.Context,
 	op func(context.Context, pb.LockServiceClient) (T, error),
 ) (T, error) {
-	var zero T
-	var lastErr error
-	queue := append([]string(nil), c.resolver.candidateAddrs()...)
-	maxOperationAttempts := len(queue) + 3
-	const maxDiscoveryRounds = 2
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, failoverBudget)
+		defer cancel()
+	}
 
-	addressAttempts := make(map[string]int)
-	operationAttempts := 0
-	discoveryRounds := 0
-
-	for operationAttempts < maxOperationAttempts {
-		if err := ctx.Err(); err != nil {
-			return zero, err
+	backoff := 50 * time.Millisecond
+	for {
+		resp, err, retry := tryCandidates(c, ctx, op)
+		if !retry {
+			return resp, err
 		}
 
-		if len(queue) == 0 {
-			if discoveryRounds >= maxDiscoveryRounds {
-				break
-			}
-			discoveryRounds++
-			leaderAddr, err := c.resolver.discoverLeader(ctx)
-			if err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return zero, ctxErr
-				}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return resp, err
+		case <-timer.C:
+		}
+		backoff = min(2*backoff, 500*time.Millisecond)
+	}
+}
+
+// tryCandidates makes one pass over the known nodes, current leader first,
+// following leader redirects. retry reports whether every node was
+// unavailable, so a later pass may succeed.
+func tryCandidates[T any](
+	c *Client,
+	ctx context.Context,
+	op func(context.Context, pb.LockServiceClient) (T, error),
+) (resp T, err error, retry bool) {
+	var zero T
+	var lastErr error
+	queue := c.resolver.candidateAddrs()
+	addressAttempts := make(map[string]int)
+
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			if lastErr == nil {
 				lastErr = err
-				continue
 			}
-			queue = append(queue, leaderAddr)
+			return zero, lastErr, false
 		}
 
 		addr := queue[0]
 		queue = queue[1:]
-		if addr == "" {
-			continue
-		}
-		if addressAttempts[addr] >= 2 {
+		if addr == "" || addressAttempts[addr] >= 2 {
 			continue
 		}
 		addressAttempts[addr]++
-		operationAttempts++
 
 		conn, err := c.resolver.connFor(addr)
 		if err != nil {
@@ -306,15 +329,13 @@ func callWithFailover[T any](
 		}
 		client := pb.NewLockServiceClient(conn)
 
-		// A blackholed endpoint must not consume the caller's entire lifetime
-		// and prevent later candidates from being tried. Six seconds exceeds
-		// the server's five-second Raft apply timeout.
-		attemptCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		resp, err := op(attemptCtx, client)
+		unresponsive := attemptCtx.Err() != nil && ctx.Err() == nil
 		cancel()
 		if err == nil {
 			c.resolver.rememberAddr(addr)
-			return resp, nil
+			return resp, nil, false
 		}
 
 		lastErr = err
@@ -325,14 +346,15 @@ func callWithFailover[T any](
 			continue
 		}
 
-		if status.Code(err) != codes.Unavailable {
-			return zero, err
+		// Every Clavis call is safe to repeat on another node: acquire and
+		// release are idempotent, and a duplicate lease just expires.
+		if status.Code(err) != codes.Unavailable && !unresponsive {
+			return zero, err, false
 		}
 	}
 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("all cluster addresses failed")
 	}
-
-	return zero, lastErr
+	return zero, lastErr, true
 }

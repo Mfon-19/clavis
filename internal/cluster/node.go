@@ -106,7 +106,7 @@ func NewNode(cfg *Config) (*Node, error) {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
 	}
 
-	r, err := raft.NewRaft(raftCfg, raftFSM, raftStorage.Bolt, raftStorage.Bolt, raftStorage.SnapshotStore, transport)
+	r, err := raft.NewRaft(raftCfg, raftFSM, raftStorage.WAL, raftStorage.WAL, raftStorage.SnapshotStore, transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create raft: %w", err)
 	}
@@ -114,7 +114,7 @@ func NewNode(cfg *Config) (*Node, error) {
 	if cfg.Bootstrap {
 		// Only bootstrap brand-new storage. Existing storage already has a
 		// cluster configuration and must be allowed to rejoin that cluster.
-		hasState, err := raft.HasExistingState(raftStorage.Bolt, raftStorage.Bolt, raftStorage.SnapshotStore)
+		hasState, err := raft.HasExistingState(raftStorage.WAL, raftStorage.WAL, raftStorage.SnapshotStore)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check existing state: %w", err)
 		}

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Mfon-19/clavis/internal/cluster"
+
 	"github.com/google/uuid"
 )
 
@@ -55,13 +57,14 @@ func ResolveNodeID(dataDir, requested string) (uuid.UUID, bool, error) {
 	generated := requested == ""
 	selectedID := requestedID
 	if generated {
-		raftDBPath := filepath.Join(dataDir, "raft.db")
-		if _, statErr := os.Stat(raftDBPath); statErr == nil {
+		hasData, err := cluster.HasRaftData(dataDir)
+		if err != nil {
+			return uuid.Nil, false, fmt.Errorf("inspect existing Raft data: %w", err)
+		}
+		if hasData {
 			return uuid.Nil, false, fmt.Errorf(
 				"existing Raft data has no persisted node id; restart with --node-id to establish its original identity",
 			)
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return uuid.Nil, false, fmt.Errorf("inspect existing Raft data: %w", statErr)
 		}
 		selectedID = uuid.New()
 	}

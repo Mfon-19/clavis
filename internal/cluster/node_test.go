@@ -2,11 +2,16 @@ package cluster
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"path/filepath"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/raft"
+	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/Mfon-19/clavis/internal/raftlog"
@@ -406,4 +411,59 @@ func TestRenewalsBypassRaftLog(t *testing.T) {
 
 	_, err = leader.RenewLease(leaseID)
 	assert.ErrorIs(t, err, domain.ErrLeaseNotFound)
+}
+
+// TestMigratesBoltDataDir verifies that a data directory written by an older
+// version, with a BoltDB log store, is migrated to the WAL on startup without
+// losing committed state. Losing it would restart the fencing counter.
+func TestMigratesBoltDataDir(t *testing.T) {
+	cfg := newTestConfig(t, t.TempDir(), false)
+
+	// Write state the way older versions did: a single-node cluster on BoltDB.
+	bolt, err := raftboltdb.New(raftboltdb.Options{Path: filepath.Join(cfg.DataDir, legacyBoltName)})
+	require.NoError(t, err)
+	snapshots, err := raft.NewFileSnapshotStore(filepath.Join(cfg.DataDir, snapshotsDirName), 3, io.Discard)
+	require.NoError(t, err)
+	transport, err := raft.NewTCPTransport(cfg.BindAddr, nil, 3, time.Second, io.Discard)
+	require.NoError(t, err)
+
+	raftCfg := raft.DefaultConfig()
+	raftCfg.LocalID = raft.ServerID(cfg.NodeID.String())
+	raftCfg.LogOutput = io.Discard
+	legacy, err := raft.NewRaft(raftCfg, state.NewRaftFSM(), bolt, bolt, snapshots, transport)
+	require.NoError(t, err)
+	require.NoError(t, legacy.BootstrapCluster(raft.Configuration{Servers: []raft.Server{
+		{ID: raftCfg.LocalID, Address: raft.ServerAddress(cfg.BindAddr)},
+	}}).Error())
+	require.Eventually(t, func() bool { return legacy.State() == raft.Leader }, 5*time.Second, 20*time.Millisecond)
+
+	applyLegacy := func(cmd *raftlog.CommandWrapper) any {
+		data, err := proto.Marshal(cmd)
+		require.NoError(t, err)
+		future := legacy.Apply(data, time.Second)
+		require.NoError(t, future.Error())
+		return future.Response()
+	}
+	lease := applyLegacy(raftlog.NewCreateLeaseCmd("client-1", time.Minute, time.Now())).(state.CreateLeaseResponse)
+	applyLegacy(raftlog.NewAcquireLockCmd("migrated-lock", "client-1", lease.LeaseID))
+
+	require.NoError(t, legacy.Shutdown().Error())
+	require.NoError(t, transport.Close())
+	require.NoError(t, bolt.Close())
+
+	node, err := NewNode(cfg)
+	require.NoError(t, err)
+	defer node.Shutdown()
+	require.NoError(t, node.WaitForLeader(5*time.Second))
+
+	require.Eventually(t, func() bool {
+		return node.Stats() == state.Stats{Locks: 1, Leases: 1, FencingCounter: 1}
+	}, 5*time.Second, 50*time.Millisecond, "migrated node did not replay committed state")
+
+	result, err := node.Apply(raftlog.NewAcquireLockCmd("second-lock", "client-1", lease.LeaseID))
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), result.(state.AcquireLockResponse).FencingToken, "fencing counter must survive migration")
+
+	assert.NoFileExists(t, filepath.Join(cfg.DataDir, legacyBoltName))
+	assert.FileExists(t, filepath.Join(cfg.DataDir, migratedBoltName))
 }

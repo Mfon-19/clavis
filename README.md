@@ -41,8 +41,10 @@ gRPC API
   Service Layer
     Cluster / Raft
       Deterministic FSM
-        BoltDB Persistence
+        Write-ahead log (raft-wal)
 ```
+
+Raft's log and stable state live in a write-ahead log that syncs to disk once per batch of entries. Data directories written by older versions, which used BoltDB, are migrated automatically on first start; the old `raft.db` is kept as `raft.db.migrated`.
 
 Leases and locks are separate concepts. A **lease** is a time-bounded session kept alive by heartbeats. A **lock** is ownership of a named resource, tied to a lease. One lease can hold many locks, and if a lease expires, all its locks are released. This separation means a single heartbeat loop keeps all of a client's locks alive.
 
@@ -234,7 +236,7 @@ go run ./cmd/clavis-bench latency failover      # a subset
 go run ./cmd/clavis-bench --seeds host1:9000,host2:9000,host3:9000   # a real cluster
 ```
 
-By default each scenario gets a fresh in-process 3-node cluster, so every node shares one machine and one disk. Commit latency is dominated by disk syncs (on macOS, bbolt's `F_FULLFSYNC`), so run against a real cluster with `--seeds` for numbers that mean anything in production. Run `go run ./cmd/clavis-bench -h` for all flags.
+By default each scenario gets a fresh in-process 3-node cluster, so every node shares one machine and one disk. Commit latency is dominated by disk syncs (on macOS, `F_FULLFSYNC`), so run against a real cluster with `--seeds` for numbers that mean anything in production. Run `go run ./cmd/clavis-bench -h` for all flags.
 
 #### Results
 
@@ -242,14 +244,14 @@ In-process 3-node cluster, Apple M4 laptop, default flags:
 
 | Scenario | Result |
 |---|---|
-| latency | acquire p50 **20ms**, p99 29ms |
-| throughput | **19 / 50 / 337** cycles/s at 1 / 8 / 64 clients |
-| handoff | p50 45ms, max 715ms; wins per client ranged 8–44 |
-| sessions | lock p99 stays **55–70ms** from 0 to 2,500 idle sessions; none lost |
-| failover | clients recover **1.7–3.5s** after a leader crash; 0/8 sessions lost |
-| handover | waiter gets the lock **2.4–3.6s** after a crash (3s TTL) |
+| latency | acquire p50 **9.9ms**, p99 16ms |
+| throughput | **49 / 89 / 531** cycles/s at 1 / 8 / 64 clients |
+| handoff | p50 23ms, max 713ms; wins per client ranged 21–78 |
+| sessions | lock p99 stays **24–29ms** from 0 to 2,500 idle sessions; none lost |
+| failover | clients recover **2.1–4.3s** after a leader crash; 0/8 sessions lost |
+| handover | waiter gets the lock **2.3–3.5s** after a crash (3s TTL) |
 
-Latency is mostly disk syncs: macOS `F_FULLFSYNC` makes each commit about 10ms per node.
+Latency is mostly disk syncs: each commit waits for one sync on the leader and one on a follower, about 4–5ms each with macOS `F_FULLFSYNC`.
 
 ### Jepsen Tests
 

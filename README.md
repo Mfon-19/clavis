@@ -114,6 +114,15 @@ A 3-node cluster is the recommended deployment for production use.
 ./clavis --remove-node node3 --cluster-addr 127.0.0.1:9000
 ```
 
+### Run the Examples
+
+The two programs in [`examples/`](examples/) each start their own in-process 3-node cluster, so there is nothing to set up first:
+
+```bash
+go run examples/fencing.go    # a stalled worker's late write is rejected by its stale fencing token (~6s)
+go run examples/failover.go   # controller replicas ride out a Raft leader crash, then a replica crash (~25s)
+```
+
 ## Go SDK
 
 The `pkg/client` package provides a Go client with leader discovery, connection pooling, and automatic lease heartbeating.
@@ -168,7 +177,9 @@ func main() {
 
 The client discovers the current leader by probing seed addresses and following structured redirect hints from follower nodes. gRPC connections are pooled and reused.
 
-If the heartbeat stream fails repeatedly and the client cannot confirm its lease is still alive, it transitions to an invalidated state and refuses further lock operations. This is a safety property: the correct response to uncertain lease ownership is to stop acting on it.
+Heartbeats go out every TTL/3. A successful renewal proves the lease is alive for one TTL after it was sent, so when renewals fail (usually during a Raft election) the client keeps retrying until a quarter TTL before that proof runs out. Only then does it give up: the session is invalidated, lock operations fail with `ErrLeaseUnavailable`, and `Client.Done()` is closed. Work guarded by a lock should watch `Done()` and stop when it fires, because the correct response to uncertain lease ownership is to stop acting on it.
+
+Pick a TTL well above your cluster's election time plus one heartbeat interval. With the default Raft timeouts an election takes about two seconds, so very short TTLs fail closed on every leader failover.
 
 ## gRPC API
 

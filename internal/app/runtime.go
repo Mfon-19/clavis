@@ -5,6 +5,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+
 	pb "github.com/Mfon-19/clavis/api/v1"
 	"github.com/Mfon-19/clavis/internal/cluster"
 	"github.com/Mfon-19/clavis/internal/domain"
@@ -12,9 +17,6 @@ import (
 	"github.com/Mfon-19/clavis/internal/transport/grpcserver"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
-	"io"
-	"net"
-	"sync"
 )
 
 // Config holds the top-level runtime configuration after the CLI validation
@@ -40,6 +42,7 @@ type Runtime struct {
 	grpcListener net.Listener
 	stopOnce     sync.Once
 	stopErr      error
+	isStopped    atomic.Bool
 }
 
 // NewRuntime creates a Runtime by wiring the dependency chain in one direction:
@@ -56,6 +59,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		DataDir:           cfg.DataDir,
 		Bootstrap:         cfg.Bootstrap,
 		GRPCAdvertiseAddr: cfg.GRPCAdvertiseAddr,
+		LogOutput:         cfg.RaftLogOutput,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create raft node: %w", err)
@@ -98,6 +102,7 @@ func (r *Runtime) Start(_ context.Context) <-chan error {
 // Stop gracefully shuts down in order: gRPC -> Raft. Idempotent
 func (r *Runtime) Stop(ctx context.Context) error {
 	r.stopOnce.Do(func() {
+		r.isStopped.Store(true)
 		gracefulDone := make(chan struct{})
 		go func() {
 			r.grpcServer.GracefulStop()
@@ -127,10 +132,15 @@ func (r *Runtime) Stop(ctx context.Context) error {
 // graceful drain of long-lived streams such as Heartbeat.
 func (r *Runtime) StopNow(ctx context.Context) error {
 	r.stopOnce.Do(func() {
+		r.isStopped.Store(true)
 		r.grpcServer.Stop()
 		r.stopErr = r.node.Shutdown()
 	})
 	return r.stopErr
+}
+
+func (r *Runtime) stopped() bool {
+	return r.isStopped.Load()
 }
 
 func (r *Runtime) Member() domain.ClusterMember {

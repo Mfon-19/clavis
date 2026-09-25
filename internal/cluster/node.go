@@ -2,15 +2,17 @@ package cluster
 
 import (
 	"fmt"
+	"io"
+	"net"
+	"os"
+	"sync"
+	"time"
+
 	"github.com/Mfon-19/clavis/internal/raftlog"
 	"github.com/Mfon-19/clavis/internal/state"
 	"github.com/google/uuid"
 	"github.com/hashicorp/raft"
 	"google.golang.org/protobuf/proto"
-	"net"
-	"os"
-	"sync"
-	"time"
 )
 
 // Node wraps a Raft instance with the clavis FSM and provides a clean API for applying
@@ -40,6 +42,7 @@ type Config struct {
 	DataDir           string    // Directory for BoltDB and snapshot storage
 	Bootstrap         bool      // True to bootstrap a new single-node cluster
 	GRPCAdvertiseAddr string    // gRPC address used for client redirects
+	LogOutput         io.Writer // Destination for Raft logs; defaults to stderr
 }
 
 // NewNode creates a Raft node with BoltDB storage, TCP transport, and the
@@ -74,10 +77,16 @@ func NewNode(cfg *Config) (*Node, error) {
 	raftCfg.CommitTimeout = 50 * time.Millisecond
 	raftCfg.SnapshotThreshold = 8192
 
+	logOutput := cfg.LogOutput
+	if logOutput == nil {
+		logOutput = os.Stderr
+	}
+	raftCfg.LogOutput = logOutput
+
 	// BoltDB stores both the Raft log and stable Raft metadata. Snapshots are
 	// file-backed so lagging/restarting nodes can catch up without replaying
 	// the entire log.
-	raftStorage, err := NewStorage(cfg.DataDir)
+	raftStorage, err := NewStorage(cfg.DataDir, logOutput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stores: %w", err)
 	}
@@ -90,7 +99,7 @@ func NewNode(cfg *Config) (*Node, error) {
 		return nil, fmt.Errorf("failed to resolve raft advertise addr: %w", err)
 	}
 
-	transport, err := raft.NewTCPTransport(cfg.BindAddr, advertiseAddr, 3, 10*time.Second, os.Stderr)
+	transport, err := raft.NewTCPTransport(cfg.BindAddr, advertiseAddr, 3, 10*time.Second, logOutput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
 	}

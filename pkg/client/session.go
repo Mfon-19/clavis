@@ -120,7 +120,8 @@ func (s *leaseSession) closeHeartbeat(stream pb.LockService_HeartbeatClient) {
 
 // invalidate marks the session as unhealthy, recording the cause and tearing
 // down the heartbeat stream. All subsequent Acquire/Release calls will fail
-// with ErrLeaseUnavailable until a new client is created.
+// with ErrLeaseUnavailable until a new client is created. It also ends the
+// session context, which is what [Client.Done] reports.
 func (s *leaseSession) invalidate(err error) {
 	s.mu.Lock()
 	if s.leaseErr == nil {
@@ -134,6 +135,7 @@ func (s *leaseSession) invalidate(err error) {
 	if cancel != nil {
 		cancel()
 	}
+	s.stopOnce.Do(s.runCancel)
 }
 
 // context returns the session-owned context that controls the background
@@ -145,9 +147,7 @@ func (s *leaseSession) context() context.Context {
 // stop signals the heartbeat goroutine to exit and closes the stream
 // connection. Safe to call multiple times.
 func (s *leaseSession) stop() error {
-	s.stopOnce.Do(func() {
-		s.runCancel()
-	})
+	s.stopOnce.Do(s.runCancel)
 
 	s.mu.Lock()
 	cancel := s.heartbeatCancel
@@ -267,42 +267,69 @@ func (c *Client) heartbeatAttemptWithin(ctx context.Context, timeout time.Durati
 	return c.heartbeatAttempt(attemptCtx, timeout)
 }
 
-// heartbeatLoop renews at TTL/3 intervals. Each exchange must finish within
-// another TTL/3, leaving time for one immediate reconnect-and-renew attempt.
-// If both attempts fail, the session is invalidated no later than its TTL.
-func (c *Client) heartbeatLoop(ctx context.Context) {
-	interval := c.session.ttl() / 3
+// heartbeatLoop renews the lease every TTL/3 and fails closed only when the
+// lease can no longer be proven alive.
+//
+// The server keeps a lease alive for at least one TTL after it receives a
+// renewal, so a renewal sent at time T that succeeds proves the lease is alive
+// until T+TTL. When renewals start failing (typically a Raft leader election,
+// during which surviving nodes may still point at the dead leader), the loop
+// keeps retrying with backoff. It gives up a quarter TTL before the last proof
+// runs out, leaving the application time to stop the work its locks protect.
+//
+// confirmedAt is the send time of the last successful renewal; for a fresh
+// session it is the time CreateLease was sent.
+func (c *Client) heartbeatLoop(ctx context.Context, confirmedAt time.Time) {
+	ttl := c.session.ttl()
+	interval := ttl / 3
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
-			err := c.heartbeatAttemptWithin(ctx, interval)
-			if err == nil {
-				continue
-			}
-			if ctx.Err() != nil {
-				return
-			}
-
-			log.Printf("[WARNING] Heartbeat failed (attempt 1): %v", err)
-			err = c.heartbeatAttemptWithin(ctx, interval)
-			if err == nil {
-				log.Printf("[INFO] Heartbeat recovered after reconnect")
-				continue
-			}
-			if ctx.Err() != nil {
-				return
-			}
-
-			leaseID, _ := c.session.heartbeatState()
-			log.Printf("[CRITICAL] Lease %d heartbeat failed twice: %v", leaseID, err)
-			c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
-			return
-
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
 		}
+
+		sentAt := time.Now()
+		err := c.heartbeatAttemptWithin(ctx, interval)
+		if err == nil {
+			confirmedAt = sentAt
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("[WARNING] Heartbeat failed, retrying: %v", err)
+
+		giveUpAt := confirmedAt.Add(ttl - ttl/4)
+		backoff := 50 * time.Millisecond
+		for err != nil {
+			remaining := time.Until(giveUpAt)
+			if remaining <= 0 {
+				leaseID, _ := c.session.heartbeatState()
+				log.Printf("[CRITICAL] Lease %d could not be renewed in time: %v", leaseID, err)
+				c.session.invalidate(fmt.Errorf("%w: %v", ErrLeaseUnavailable, err))
+				return
+			}
+
+			timer := time.NewTimer(min(backoff, remaining))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			backoff = min(2*backoff, 500*time.Millisecond)
+
+			sentAt = time.Now()
+			err = c.heartbeatAttemptWithin(ctx, min(interval, max(time.Until(giveUpAt), time.Millisecond)))
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		confirmedAt = sentAt
+		log.Printf("[INFO] Heartbeat recovered")
 	}
 }

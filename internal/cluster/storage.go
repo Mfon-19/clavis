@@ -1,7 +1,7 @@
 package cluster
 
 import (
-	"os"
+	"io"
 	"path/filepath"
 
 	"github.com/hashicorp/raft"
@@ -18,7 +18,7 @@ type Storage struct {
 }
 
 // NewStorage opens the Raft stores under dataDir, which must already exist.
-func NewStorage(dataDir string) (*Storage, error) {
+func NewStorage(dataDir string, logOutput io.Writer) (*Storage, error) {
 	bolt, err := raftboltdb.New(raftboltdb.Options{
 		Path: filepath.Join(dataDir, "raft.db"),
 	})
@@ -26,7 +26,7 @@ func NewStorage(dataDir string) (*Storage, error) {
 		return nil, err
 	}
 
-	snapshotStore, err := raft.NewFileSnapshotStore(filepath.Join(dataDir, "snapshots"), 3, os.Stderr)
+	snapshotStore, err := raft.NewFileSnapshotStore(filepath.Join(dataDir, "snapshots"), 3, logOutput)
 	if err != nil {
 		bolt.Close()
 		return nil, err

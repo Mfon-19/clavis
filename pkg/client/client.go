@@ -67,6 +67,9 @@ func (c *Client) Start(ctx context.Context, ttl time.Duration) error {
 	}
 
 	ttlSeconds := int64(ttl / time.Second)
+	// The lease is created no earlier than this, so it is alive until at least
+	// createSentAt+TTL. The heartbeat loop builds on that proof.
+	createSentAt := time.Now()
 	resp, err := callWithFailover(c, ctx, func(attemptCtx context.Context, client pb.LockServiceClient) (*pb.CreateLeaseResponse, error) {
 		return client.CreateLease(attemptCtx, &pb.CreateLeaseRequest{
 			OwnerId:    c.ownerID,
@@ -98,7 +101,7 @@ func (c *Client) Start(ctx context.Context, ttl time.Duration) error {
 		return err
 	}
 
-	go c.heartbeatLoop(sessionCtx)
+	go c.heartbeatLoop(sessionCtx, createSentAt)
 	return nil
 }
 
@@ -165,6 +168,14 @@ func (c *Client) Status(ctx context.Context) (*pb.GetStatusResponse, error) {
 
 	c.resolver.rememberStatus(resp)
 	return resp, nil
+}
+
+// Done returns a channel that is closed when the client's session ends,
+// either because Stop was called or because the lease could no longer be
+// confirmed alive. Once Done is closed, every lock acquired through this
+// client must be treated as lost: stop the work it protects.
+func (c *Client) Done() <-chan struct{} {
+	return c.session.context().Done()
 }
 
 // Stop tears down the heartbeat stream and closes all gRPC connections.

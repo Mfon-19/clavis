@@ -28,6 +28,21 @@ type FSM struct {
 
 	fencingCounter uint64 // global monotonic fencing token counter
 	nextLeaseID    uint64 // next leaseID to assign
+
+	onLockFreed func(lockName string) // see SetLockFreedHook
+}
+
+// SetLockFreedHook registers fn to be called whenever a release or a lease
+// expiry frees a lock. It runs inside Apply with the FSM locked, so fn must
+// be fast and must not call back into the FSM. Set it before Raft starts.
+func (f *FSM) SetLockFreedHook(fn func(lockName string)) {
+	f.onLockFreed = fn
+}
+
+func (f *FSM) lockFreed(lockName string) {
+	if f.onLockFreed != nil {
+		f.onLockFreed(lockName)
+	}
 }
 
 // NewFSM creates an empty state machine with lease IDs starting from 1
@@ -179,6 +194,7 @@ func (f *FSM) applyReleaseLock(cmd *raftlog.ReleaseLockCommand) (any, error) {
 	}
 
 	delete(f.locks, cmd.GetLockName())
+	f.lockFreed(cmd.GetLockName())
 	return nil, nil
 }
 
@@ -199,6 +215,7 @@ func (f *FSM) applyExpireLease(cmd *raftlog.ExpireLeaseCommand) (any, error) {
 	for lockName, lock := range f.locks {
 		if lock.LeaseID == lease.LeaseID {
 			delete(f.locks, lockName)
+			f.lockFreed(lockName)
 			locksReleased++
 		}
 	}

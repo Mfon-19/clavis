@@ -50,6 +50,11 @@ message AcquireLockRequest {
   // owner_id must match the owner that created the lease.
   string owner_id = 2;
   uint64 lease_id = 3;
+  // wait queues the caller if another lease holds the lock. The leader hands
+  // the lock to waiters in arrival order as soon as it is freed. A wait lasts
+  // a few seconds at most; if the lock is still held, the call returns
+  // ALREADY_EXISTS and the caller may wait again.
+  bool wait = 4;
 }
 
 message AcquireLockResponse {

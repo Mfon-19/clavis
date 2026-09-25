@@ -467,3 +467,34 @@ func TestMigratesBoltDataDir(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(cfg.DataDir, legacyBoltName))
 	assert.FileExists(t, filepath.Join(cfg.DataDir, migratedBoltName))
 }
+
+// TestLockQueue verifies the waiter queue: arrival order decides the head, a
+// freed lock wakes only the head, and a head that leaves wakes the next one.
+func TestLockQueue(t *testing.T) {
+	node := &Node{lockQueues: newLockQueues()}
+	woken := func(w *LockWaiter) bool {
+		select {
+		case <-w.Ready():
+			return true
+		default:
+			return false
+		}
+	}
+
+	first := node.JoinLockQueue("lock")
+	second := node.JoinLockQueue("lock")
+	assert.True(t, node.LockHasWaiters("lock"))
+	assert.True(t, first.IsHead())
+	assert.False(t, second.IsHead())
+
+	node.lockQueues.wakeHead("lock")
+	assert.True(t, woken(first))
+	assert.False(t, woken(second), "only the head is woken when the lock is freed")
+
+	first.Leave()
+	assert.True(t, second.IsHead())
+	assert.True(t, woken(second), "the new head is woken so it can check the lock")
+
+	second.Leave()
+	assert.False(t, node.LockHasWaiters("lock"))
+}

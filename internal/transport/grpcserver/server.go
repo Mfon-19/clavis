@@ -57,7 +57,7 @@ func (s *Server) CreateLease(ctx context.Context, req *pb.CreateLeaseRequest) (*
 }
 
 func (s *Server) AcquireLock(ctx context.Context, req *pb.AcquireLockRequest) (*pb.AcquireLockResponse, error) {
-	resp, err := s.service.AcquireLock(req.LockName, req.OwnerId, req.LeaseId)
+	resp, err := s.service.AcquireLock(ctx, req.LockName, req.OwnerId, req.LeaseId, req.Wait)
 	if err != nil {
 		return nil, toGRPCError(err)
 	}

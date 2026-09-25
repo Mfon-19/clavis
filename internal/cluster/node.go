@@ -30,7 +30,8 @@ type Node struct {
 	shutdownOnce sync.Once
 	clockStarted time.Time
 
-	leases leaseTracker
+	leases     leaseTracker
+	lockQueues *lockQueues
 
 	barrierMu   sync.Mutex
 	barrierTerm uint64 // last term whose earlier entries are known applied
@@ -72,6 +73,8 @@ func NewNode(cfg *Config) (*Node, error) {
 
 	raftFSM := state.NewRaftFSM()
 	stateMachine := raftFSM.GetFSM()
+	lockQueues := newLockQueues()
+	stateMachine.SetLockFreedHook(lockQueues.wakeHead)
 	raftCfg := raft.DefaultConfig()
 	raftCfg.LocalID = raft.ServerID(cfg.NodeID.String())
 	raftCfg.HeartbeatTimeout = 1000 * time.Millisecond
@@ -142,6 +145,7 @@ func NewNode(cfg *Config) (*Node, error) {
 		cfg:          cfg,
 		stopCh:       make(chan struct{}),
 		clockStarted: time.Now(),
+		lockQueues:   lockQueues,
 	}
 
 	go node.leaseExpiryLoop()

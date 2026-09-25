@@ -5,6 +5,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -387,7 +388,7 @@ func acquireWithLeaderRetry(nodes []*cluster.Node, lockName, owner string, lease
 			continue
 		}
 
-		resp, err := service.AcquireLock(lockName, owner, leaseID)
+		resp, err := service.AcquireLock(context.Background(), lockName, owner, leaseID, false)
 		switch {
 		case err == nil:
 			return resp, false, nil

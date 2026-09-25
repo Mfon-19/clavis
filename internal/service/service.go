@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -107,9 +109,23 @@ func (s *Service) RenewLease(leaseID uint64) (time.Duration, error) {
 	return s.node.RenewLease(leaseID)
 }
 
-// AcquireLock acquires a named distributed lock bound to the given lease.
-// Returns a monotonic fencing token for split-brain protection
-func (s *Service) AcquireLock(lockName, ownerID string, leaseID uint64) (state.AcquireLockResponse, error) {
+const (
+	// maxLockWait bounds one waiting acquire. It stays below the SDK's
+	// per-attempt timeout so a wait ends with an answer, not a client timeout.
+	maxLockWait = 4 * time.Second
+	// leaderRecheck is how often a waiter confirms this node still leads, so
+	// waiters are redirected promptly after a failover.
+	leaderRecheck = 250 * time.Millisecond
+)
+
+// AcquireLock acquires a named distributed lock bound to the given lease and
+// returns its monotonic fencing token.
+//
+// If another lease holds the lock and wait is false, it fails at once with
+// ErrLockAlreadyHeld. If wait is true, the caller joins the lock's queue and
+// is handed the lock, in arrival order, as soon as it is freed. A wait ends
+// with ErrLockAlreadyHeld after maxLockWait or when ctx is done.
+func (s *Service) AcquireLock(ctx context.Context, lockName, ownerID string, leaseID uint64, wait bool) (state.AcquireLockResponse, error) {
 	if err := s.ensureLeader(); err != nil {
 		return state.AcquireLockResponse{}, err
 	}
@@ -117,11 +133,62 @@ func (s *Service) AcquireLock(lockName, ownerID string, leaseID uint64) (state.A
 		return state.AcquireLockResponse{}, &InvalidArgumentError{Message: "owner_id, lock_name and lease_id are required"}
 	}
 
+	if !wait {
+		// Callers that are not queued may not take a contended lock ahead of
+		// those that are. The current holder may still re-acquire.
+		if s.node.LockHasWaiters(lockName) && !s.heldBy(lockName, leaseID) {
+			return state.AcquireLockResponse{}, domain.ErrLockAlreadyHeld
+		}
+		return s.acquire(lockName, ownerID, leaseID)
+	}
+
+	waiter := s.node.JoinLockQueue(lockName)
+	defer waiter.Leave()
+
+	timeout := time.NewTimer(maxLockWait)
+	defer timeout.Stop()
+	recheck := time.NewTicker(leaderRecheck)
+	defer recheck.Stop()
+
+	for {
+		// Only the head of the queue tries, and only when the lock looks free,
+		// so waiting never spends Raft commits on attempts that must fail.
+		if waiter.IsHead() && !s.heldByOther(lockName, leaseID) {
+			resp, err := s.acquire(lockName, ownerID, leaseID)
+			if !errors.Is(err, domain.ErrLockAlreadyHeld) {
+				return resp, err
+			}
+		}
+
+		select {
+		case <-waiter.Ready():
+		case <-recheck.C:
+			if err := s.ensureLeader(); err != nil {
+				return state.AcquireLockResponse{}, err
+			}
+		case <-timeout.C:
+			return state.AcquireLockResponse{}, domain.ErrLockAlreadyHeld
+		case <-ctx.Done():
+			return state.AcquireLockResponse{}, domain.ErrLockAlreadyHeld
+		}
+	}
+}
+
+func (s *Service) acquire(lockName, ownerID string, leaseID uint64) (state.AcquireLockResponse, error) {
 	if err := s.node.CheckLeaseAlive(leaseID); err != nil {
 		return state.AcquireLockResponse{}, err
 	}
-
 	return as[state.AcquireLockResponse](s.node.Apply(raftlog.NewAcquireLockCmd(lockName, ownerID, leaseID)))
+}
+
+func (s *Service) heldBy(lockName string, leaseID uint64) bool {
+	lock, held := s.node.GetFSM().GetLock(lockName)
+	return held && lock.LeaseID == leaseID
+}
+
+func (s *Service) heldByOther(lockName string, leaseID uint64) bool {
+	lock, held := s.node.GetFSM().GetLock(lockName)
+	return held && lock.LeaseID != leaseID
 }
 
 // ReleaseLock releases a held lock. Only the lease that acquired it may release it.

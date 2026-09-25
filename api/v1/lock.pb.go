@@ -228,8 +228,13 @@ type AcquireLockRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	LockName string                 `protobuf:"bytes,1,opt,name=lock_name,json=lockName,proto3" json:"lock_name,omitempty"`
 	// owner_id must match the owner that created the lease.
-	OwnerId       string `protobuf:"bytes,2,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
-	LeaseId       uint64 `protobuf:"varint,3,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	OwnerId string `protobuf:"bytes,2,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	LeaseId uint64 `protobuf:"varint,3,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	// wait queues the caller if another lease holds the lock. The leader hands
+	// the lock to waiters in arrival order as soon as it is freed. A wait lasts
+	// a few seconds at most; if the lock is still held, the call returns
+	// ALREADY_EXISTS and the caller may wait again.
+	Wait          bool `protobuf:"varint,4,opt,name=wait,proto3" json:"wait,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -283,6 +288,13 @@ func (x *AcquireLockRequest) GetLeaseId() uint64 {
 		return x.LeaseId
 	}
 	return 0
+}
+
+func (x *AcquireLockRequest) GetWait() bool {
+	if x != nil {
+		return x.Wait
+	}
+	return false
 }
 
 type AcquireLockResponse struct {
@@ -951,11 +963,12 @@ const file_lock_proto_rawDesc = "" +
 	"\x11HeartbeatResponse\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\x04R\aleaseId\x12\x1f\n" +
 	"\vttl_seconds\x18\x02 \x01(\x03R\n" +
-	"ttlSeconds\"g\n" +
+	"ttlSeconds\"{\n" +
 	"\x12AcquireLockRequest\x12\x1b\n" +
 	"\tlock_name\x18\x01 \x01(\tR\blockName\x12\x19\n" +
 	"\bowner_id\x18\x02 \x01(\tR\aownerId\x12\x19\n" +
-	"\blease_id\x18\x03 \x01(\x04R\aleaseId\"f\n" +
+	"\blease_id\x18\x03 \x01(\x04R\aleaseId\x12\x12\n" +
+	"\x04wait\x18\x04 \x01(\bR\x04wait\"f\n" +
 	"\x13AcquireLockResponse\x12#\n" +
 	"\rfencing_token\x18\x01 \x01(\x04R\ffencingToken\x12*\n" +
 	"\x11lease_ttl_seconds\x18\x02 \x01(\x03R\x0fleaseTtlSeconds\"L\n" +

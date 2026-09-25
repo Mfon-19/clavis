@@ -111,6 +111,13 @@ func (c *Client) Start(ctx context.Context, ttl time.Duration) error {
 // If another lease holds the lock, the error wraps [ErrLockHeld]. Use
 // [Client.WaitAcquire] to wait for a busy lock instead.
 func (c *Client) Acquire(ctx context.Context, lockName string) (*Lock, error) {
+	return c.acquire(ctx, lockName, false)
+}
+
+// acquire asks the leader for the lock. With wait set, the leader queues the
+// request behind earlier waiters and answers once the lock is handed over or
+// its wait window ends.
+func (c *Client) acquire(ctx context.Context, lockName string, wait bool) (*Lock, error) {
 	leaseID, err := c.session.activeLeaseID()
 	if err != nil {
 		return nil, err
@@ -121,6 +128,7 @@ func (c *Client) Acquire(ctx context.Context, lockName string) (*Lock, error) {
 			LockName: lockName,
 			OwnerId:  c.ownerID,
 			LeaseId:  leaseID,
+			Wait:     wait,
 		})
 	})
 	if status.Code(err) == codes.AlreadyExists {

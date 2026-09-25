@@ -60,11 +60,13 @@ Leases and locks are separate concepts. A **lease** is a time-bounded session ke
 
 **Cheap, renewal-safe heartbeats.** Renewals are not written to the Raft log. The leader records them in memory and confirms its leadership with a quorum round trip before acknowledging, so a heartbeat costs a network round trip rather than a disk sync. A lease claimed for expiry can no longer be renewed, and a new leader treats every lease as renewed at the moment it took over, so no acknowledged renewal is ever cut short.
 
+**First-come, first-served waiting.** `WaitAcquire` queues on the leader. When a lock is released or its lease expires, the leader hands it to the longest waiter right away, and callers that are not waiting cannot take it ahead of them.
+
 **Fail-closed client behavior.** If the Go client loses confidence in its lease health, it invalidates the session and refuses future lock operations rather than proceeding with uncertain ownership.
 
 ## Limitations
 
-**No fairness.** There is no waiter queue. If multiple clients race for the same lock, one may win repeatedly while others are starved.
+**Wait order resets on failover.** The waiter queue lives in the leader's memory. After a leader change, waiters queue again on the new leader in the order they reach it.
 
 **No availability during quorum loss.** Writes fail or stall until a new leader is elected. This is expected for a CP system.
 
@@ -246,10 +248,10 @@ In-process 3-node cluster, Apple M4 laptop, default flags:
 |---|---|
 | latency | acquire p50 **9.9ms**, p99 16ms |
 | throughput | **49 / 89 / 531** cycles/s at 1 / 8 / 64 clients |
-| handoff | p50 23ms, max 713ms; wins per client ranged 21–78 |
+| handoff | p50 18ms, max **30ms**; wins per client ranged 66–67 |
 | sessions | lock p99 stays **24–29ms** from 0 to 2,500 idle sessions; none lost |
 | failover | clients recover **2.1–4.3s** after a leader crash; 0/8 sessions lost |
-| handover | waiter gets the lock **2.3–3.5s** after a crash (3s TTL) |
+| handover | waiter gets the lock **2.1–2.7s** after a crash (3s TTL) |
 
 Latency is mostly disk syncs: each commit waits for one sync on the leader and one on a follower, about 4–5ms each with macOS `F_FULLFSYNC`.
 

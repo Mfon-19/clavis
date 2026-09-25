@@ -25,18 +25,20 @@ message CreateLeaseCommand {
   int64 create_at_unix_nano = 3;
 }
 
-// RenewLeaseCommand renews an existing lease relative to the proposal time.
+// RenewLeaseCommand is no longer written. Renewals are tracked in memory on the
+// leader; entries written by older versions are ignored on replay.
 message RenewLeaseCommand {
   uint64 lease_id = 1;
   int64 renewed_at_unix_nano = 2;
 }
 
-// AcquireLockCommand acquires a lock with fencing. The timestamp lets the FSM
-// reject acquisitions whose lease had already expired at proposal time.
+// AcquireLockCommand acquires a lock with fencing. The lease must still exist
+// when the command applies; lease liveness is decided by the leader.
 message AcquireLockCommand {
   string lock_name = 1;
   string owner_id = 2;
   uint64 lease_id = 3;
+  // No longer set or read.
   int64 acquired_at_unix_nano = 4;
 }
 
@@ -46,10 +48,11 @@ message ReleaseLockCommand {
   uint64 lease_id = 2;
 }
 
-// ExpireLeaseCommand expires a lease and releases all its locks. If a renewal
-// committed first, the FSM no-ops this command instead of deleting live state.
+// ExpireLeaseCommand expires a lease and releases all its locks. Only the
+// leader proposes it, after deciding the lease is dead.
 message ExpireLeaseCommand {
   uint64 lease_id = 1;
+  // No longer set or read.
   int64 expired_at_unix_nano = 2;
 }
 

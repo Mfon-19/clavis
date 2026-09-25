@@ -2,9 +2,10 @@ package state
 
 import (
 	"fmt"
+	"sync"
+
 	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/Mfon-19/clavis/internal/raftlog"
-	"sync"
 
 	tm "time"
 )
@@ -51,7 +52,9 @@ func (f *FSM) Apply(cmd *raftlog.CommandWrapper) (any, error) {
 	case raftlog.CommandType_COMMAND_TYPE_CREATE_LEASE:
 		return f.applyCreateLease(cmd.GetCreateLease())
 	case raftlog.CommandType_COMMAND_TYPE_RENEW_LEASE:
-		return f.applyRenewLease(cmd.GetRenewLease())
+		// Renewals used to be replicated. They are now tracked in memory on
+		// the leader, so entries written by older versions are ignored.
+		return nil, nil
 	case raftlog.CommandType_COMMAND_TYPE_ACQUIRE_LOCK:
 		return f.applyAcquireLock(cmd.GetAcquireLock())
 	case raftlog.CommandType_COMMAND_TYPE_RELEASE_LOCK:
@@ -112,47 +115,6 @@ func (f *FSM) applyCreateLease(cmd *raftlog.CreateLeaseCommand) (any, error) {
 	}, nil
 }
 
-// returned when a lease is renewed
-type RenewLeaseResponse struct {
-	ExpiresAt tm.Time
-	TTL       tm.Duration
-}
-
-func (f *FSM) applyRenewLease(cmd *raftlog.RenewLeaseCommand) (any, error) {
-	renewedAt, err := commandTime(cmd.GetRenewedAtUnixNano())
-	if err != nil {
-		return nil, err
-	}
-
-	lease, exists := f.leases[cmd.GetLeaseId()]
-	if !exists {
-		return nil, domain.ErrLeaseNotFound
-	}
-
-	// If the lease was already expired at the renewal proposal time, this renewal
-	// is rejected. The cluster layer handles pending renewals so a timely renewal
-	// is not incorrectly beaten by the expiry loop
-	if lease.IsExpired(renewedAt) {
-		return nil, domain.ErrLeaseExpired
-	}
-
-	// A delayed renewal may be applied after a newer one when concurrent RPCs
-	// reach Raft in a different order than their proposal timestamps. Never let
-	// that older proposal move the lease deadline backwards.
-	proposedExpiry, err := leaseExpiryAt(renewedAt, lease.TTL)
-	if err != nil {
-		return nil, err
-	}
-	if proposedExpiry.After(lease.ExpiresAt()) {
-		lease.ExpiresAtUnixNano = proposedExpiry.UnixNano()
-	}
-
-	return RenewLeaseResponse{
-		ExpiresAt: lease.ExpiresAt(),
-		TTL:       lease.TTL,
-	}, nil
-}
-
 // AcquireLockResponse is returned when a lock is successfully acquired.
 // FencingToken is globally monotonic and should be passed to downstream
 // systems to prevent stale writes from expired lock holders
@@ -162,18 +124,11 @@ type AcquireLockResponse struct {
 }
 
 func (f *FSM) applyAcquireLock(cmd *raftlog.AcquireLockCommand) (any, error) {
-	acquredAt, err := commandTime(cmd.GetAcquiredAtUnixNano())
-	if err != nil {
-		return nil, err
-	}
-
+	// A lease that exists is alive: the leader decides expiry and removes the
+	// lease through an expiry command, which is ordered with this one.
 	lease, exists := f.leases[cmd.GetLeaseId()]
 	if !exists {
 		return nil, domain.ErrLeaseNotFound
-	}
-
-	if lease.IsExpired(acquredAt) {
-		return nil, domain.ErrLeaseExpired
 	}
 
 	if lease.OwnerID != cmd.GetOwnerId() {
@@ -232,19 +187,8 @@ type ExpireLeaseResponse struct {
 }
 
 func (f *FSM) applyExpireLease(cmd *raftlog.ExpireLeaseCommand) (any, error) {
-	expiredAt, err := commandTime(cmd.GetExpiredAtUnixNano())
-	if err != nil {
-		return nil, err
-	}
-
 	lease, exists := f.leases[cmd.GetLeaseId()]
 	if !exists {
-		return ExpireLeaseResponse{}, nil
-	}
-
-	if !lease.IsExpired(expiredAt) {
-		// A renewal may have committed before this expiry command. In that case,
-		// the expiry command is stale and must not delete the renewed lease.
 		return ExpireLeaseResponse{}, nil
 	}
 
@@ -336,20 +280,17 @@ func (f *FSM) Stats() Stats {
 	}
 }
 
-// GetExpiredLeases returns the IDs of all leases whose expiry is at or before now.
-// Called by the leader's background expiry loop.
-func (f *FSM) GetExpiredLeases(now tm.Time) []uint64 {
+// Leases returns a copy of every lease. The leader's expiry loop uses it to
+// decide which leases have outlived their renewals.
+func (f *FSM) Leases() []domain.Lease {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	var expired []uint64
-	for leaseID, lease := range f.leases {
-		if lease.IsExpired(now) {
-			expired = append(expired, leaseID)
-		}
+	leases := make([]domain.Lease, 0, len(f.leases))
+	for _, lease := range f.leases {
+		leases = append(leases, *lease)
 	}
-
-	return expired
+	return leases
 }
 
 func commandTime(unixNano int64) (tm.Time, error) {

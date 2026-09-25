@@ -48,7 +48,7 @@ Leases and locks are separate concepts. A **lease** is a time-bounded session ke
 
 ## Guarantees
 
-**Linearizable lock and lease mutations.** All writes go through Raft and commit to a quorum before taking effect. There is a single replicated order for every state transition.
+**Linearizable lock and lease mutations.** Creating leases, acquiring and releasing locks, and expiring leases all go through Raft and commit to a quorum before taking effect. There is a single replicated order for every state transition.
 
 **Globally monotonic fencing tokens.** Every successful lock acquisition increments a cluster-wide counter. Tokens are never reused or decremented, even across leader elections.
 
@@ -56,7 +56,7 @@ Leases and locks are separate concepts. A **lease** is a time-bounded session ke
 
 **Idempotent re-acquisition.** If the same lease re-acquires a lock it already holds, the same fencing token is returned. No new token is minted.
 
-**Renewal-safe expiry.** The leader tracks in-flight lease renewals in the Raft pipeline. The expiry loop will not propose a stale expiry while a timely renewal is still uncommitted.
+**Cheap, renewal-safe heartbeats.** Renewals are not written to the Raft log. The leader records them in memory and confirms its leadership with a quorum round trip before acknowledging, so a heartbeat costs a network round trip rather than a disk sync. A lease claimed for expiry can no longer be renewed, and a new leader treats every lease as renewed at the moment it took over, so no acknowledged renewal is ever cut short.
 
 **Fail-closed client behavior.** If the Go client loses confidence in its lease health, it invalidates the session and refuses future lock operations rather than proceeding with uncertain ownership.
 
@@ -224,7 +224,7 @@ This includes FSM invariant tests, snapshot/restore tests, and Porcupine lineari
 | `latency` | Acquire and release latency for one uncontended client |
 | `throughput` | Lock cycles per second with 1, 8, and 64 clients on distinct locks |
 | `handoff` | How quickly a contended lock passes between waiting clients, and how unevenly |
-| `sessions` | Lock latency as idle heartbeating sessions add Raft write load |
+| `sessions` | Lock latency as the number of idle heartbeating sessions grows |
 | `failover` | Time until clients succeed again after the Raft leader crashes, and sessions lost |
 | `handover` | Time for a waiter to get a lock after its holder crashes without releasing |
 
@@ -245,7 +245,7 @@ In-process 3-node cluster, Apple M4 laptop, default flags:
 | latency | acquire p50 **20ms**, p99 29ms |
 | throughput | **19 / 50 / 337** cycles/s at 1 / 8 / 64 clients |
 | handoff | p50 45ms, max 715ms; wins per client ranged 8–44 |
-| sessions | lock p99 **68ms → 1.15s** from 0 to 2,500 idle sessions; none lost |
+| sessions | lock p99 stays **55–70ms** from 0 to 2,500 idle sessions; none lost |
 | failover | clients recover **1.7–3.5s** after a leader crash; 0/8 sessions lost |
 | handover | waiter gets the lock **2.4–3.6s** after a crash (3s TTL) |
 

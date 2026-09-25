@@ -204,7 +204,7 @@ func TestRestartPersistence(t *testing.T) {
 	require.NoError(t, err)
 	firstLease := firstLeaseResult.(state.CreateLeaseResponse)
 
-	firstAcquireResult, err := node.Apply(raftlog.NewAcquireLockCmd("persisted-lock", "client-1", firstLease.LeaseID, time.Now().UTC()))
+	firstAcquireResult, err := node.Apply(raftlog.NewAcquireLockCmd("persisted-lock", "client-1", firstLease.LeaseID))
 	require.NoError(t, err)
 	firstAcquire := firstAcquireResult.(state.AcquireLockResponse)
 	assert.Equal(t, uint64(1), firstAcquire.FencingToken)
@@ -244,7 +244,7 @@ func TestRestartPersistence(t *testing.T) {
 	secondLease := secondLeaseResult.(state.CreateLeaseResponse)
 	assert.Equal(t, firstLease.LeaseID+1, secondLease.LeaseID, "lease ID allocator should continue after restart")
 
-	secondAcquireResult, err := restarted.Apply(raftlog.NewAcquireLockCmd("second-lock", "client-2", secondLease.LeaseID, time.Now().UTC()))
+	secondAcquireResult, err := restarted.Apply(raftlog.NewAcquireLockCmd("second-lock", "client-2", secondLease.LeaseID))
 	require.NoError(t, err)
 	secondAcquire := secondAcquireResult.(state.AcquireLockResponse)
 	assert.Equal(t, uint64(2), secondAcquire.FencingToken, "fencing counter should continue after restart")
@@ -263,7 +263,7 @@ func TestLeaderFailover(t *testing.T) {
 	require.NoError(t, err)
 	createResp := createResult.(state.CreateLeaseResponse)
 
-	acquireResult, err := originalLeader.Apply(raftlog.NewAcquireLockCmd("alpha", "client-1", createResp.LeaseID, time.Now().UTC()))
+	acquireResult, err := originalLeader.Apply(raftlog.NewAcquireLockCmd("alpha", "client-1", createResp.LeaseID))
 	require.NoError(t, err)
 	acquireResp := acquireResult.(state.AcquireLockResponse)
 	assert.Equal(t, uint64(1), acquireResp.FencingToken)
@@ -311,7 +311,7 @@ func TestLeaderFailover(t *testing.T) {
 		return lock.LeaseID == createResp.LeaseID && lock.FencingToken == 1
 	}, 5*time.Second, 100*time.Millisecond, "new leader did not preserve replicated lock state")
 
-	secondAcquireResult, err := newLeader.Apply(raftlog.NewAcquireLockCmd("beta", "client-1", createResp.LeaseID, time.Now().UTC()))
+	secondAcquireResult, err := newLeader.Apply(raftlog.NewAcquireLockCmd("beta", "client-1", createResp.LeaseID))
 	require.NoError(t, err)
 	secondAcquire := secondAcquireResult.(state.AcquireLockResponse)
 	assert.Equal(t, uint64(2), secondAcquire.FencingToken, "new leader should continue fencing sequence")
@@ -342,33 +342,68 @@ func TestLeaderFailover(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond, "remaining cluster did not converge after failover")
 }
 
-// TestLeaseExpiryGuards verifies the two conditions that hold back lease
-// expiry on the leader: a renewal proposed before the lease's deadline that is
-// still in the Raft pipeline, and the post-election grace period.
-func TestLeaseExpiryGuards(t *testing.T) {
-	stateMachine := state.NewFSM()
+// TestLeaseTracker verifies how the leader decides lease liveness: renewals
+// extend the deadline, a lease claimed for expiry cannot be renewed, and a new
+// leadership term restarts every lease's clock.
+func TestLeaseTracker(t *testing.T) {
 	createdAt := time.Unix(1_700_000_000, 0).UTC()
-
-	createResult, err := stateMachine.Apply(raftlog.NewCreateLeaseCmd("client-1", 5*time.Second, createdAt))
-	require.NoError(t, err)
-	leaseID := createResult.(state.CreateLeaseResponse).LeaseID
-
-	node := &Node{
-		fsm:             stateMachine,
-		pendingRenewals: make(map[uint64]map[int64]int),
+	lease := domain.Lease{
+		LeaseID:           1,
+		OwnerID:           "client-1",
+		ExpiresAtUnixNano: createdAt.Add(5 * time.Second).UnixNano(),
+		TTL:               5 * time.Second,
 	}
-	leaderSince := createdAt
-	now := createdAt.Add(12 * time.Second)
+	leases := []domain.Lease{lease}
+	at := func(d time.Duration) time.Time { return createdAt.Add(d) }
 
-	timely := createdAt.Add(4 * time.Second)
-	node.recordPendingRenewal(leaseID, timely)
-	node.recordPendingRenewal(leaseID, createdAt.Add(8*time.Second))
-	assert.False(t, node.shouldExpireLease(leaseID, now, leaderSince), "timely renewal still in flight")
+	var tracker leaseTracker
+	require.NoError(t, tracker.renew(1, at(4*time.Second), lease))
+	assert.Empty(t, tracker.claimExpired(1, at(8*time.Second), leases), "renewal at 4s lasts until 9s")
+	assert.Equal(t, []uint64{1}, tracker.claimExpired(1, at(9*time.Second), leases))
+	assert.ErrorIs(t, tracker.renew(1, at(9*time.Second), lease), domain.ErrLeaseExpired, "claimed lease cannot be renewed")
 
-	node.clearPendingRenewal(leaseID, timely)
-	assert.True(t, node.shouldExpireLease(leaseID, now, leaderSince), "renewal proposed after expiry cannot save the lease")
+	tracker.finishExpiry(1, false)
+	assert.Equal(t, []uint64{1}, tracker.claimExpired(1, at(9*time.Second), leases), "failed expiry is retried")
 
-	newLeaderSince := createdAt.Add(10 * time.Second)
-	assert.False(t, node.shouldExpireLease(leaseID, now, newLeaderSince), "new leader must wait one TTL")
-	assert.True(t, node.shouldExpireLease(leaseID, newLeaderSince.Add(5*time.Second), newLeaderSince))
+	// A new term forgets renewals and claims, and restarts every deadline.
+	assert.Empty(t, tracker.claimExpired(2, at(10*time.Second), leases))
+	assert.Empty(t, tracker.claimExpired(2, at(14*time.Second), leases), "new leader waits one TTL")
+	assert.Equal(t, []uint64{1}, tracker.claimExpired(2, at(15*time.Second), leases))
+}
+
+// TestRenewalsBypassRaftLog verifies that renewing a lease keeps it alive past
+// its TTL without appending to the Raft log, and that the leader expires it
+// once renewals stop.
+func TestRenewalsBypassRaftLog(t *testing.T) {
+	nodes, _ := startTestCluster(t, 3)
+	leader := waitForSingleLeader(t, nodes, 5*time.Second)
+
+	const ttl = time.Second
+	result, err := leader.Apply(raftlog.NewCreateLeaseCmd("client-1", ttl, leader.Now()))
+	require.NoError(t, err)
+	leaseID := result.(state.CreateLeaseResponse).LeaseID
+
+	// The first renewal in a term issues one barrier entry; after that,
+	// renewals must not touch the log.
+	_, err = leader.RenewLease(leaseID)
+	require.NoError(t, err)
+	logIndex := leader.raft.LastIndex()
+
+	for deadline := time.Now().Add(3 * ttl); time.Now().Before(deadline); {
+		renewedTTL, err := leader.RenewLease(leaseID)
+		require.NoError(t, err)
+		assert.Equal(t, ttl, renewedTTL)
+		time.Sleep(ttl / 4)
+	}
+	_, exists := leader.GetFSM().GetLease(leaseID)
+	require.True(t, exists, "renewed lease must outlive its TTL")
+	assert.Equal(t, logIndex, leader.raft.LastIndex(), "renewals must not append to the Raft log")
+
+	require.Eventually(t, func() bool {
+		_, exists := leader.GetFSM().GetLease(leaseID)
+		return !exists
+	}, 3*ttl, 50*time.Millisecond, "lease was not expired after renewals stopped")
+
+	_, err = leader.RenewLease(leaseID)
+	assert.ErrorIs(t, err, domain.ErrLeaseNotFound)
 }

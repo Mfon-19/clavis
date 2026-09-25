@@ -97,15 +97,14 @@ func (s *Service) CreateLease(ownerID string, ttlSeconds int64) (state.CreateLea
 	return as[state.CreateLeaseResponse](s.node.Apply(raftlog.NewCreateLeaseCmd(ownerID, ttl, now)))
 }
 
-// RenewLease extends a lease's expiry by its original TTL. It uses
-// Node.ApplyRenewLease instead of Node.Apply directly so the leader can track
-// the renewal as pending while Raft replication is in flight
-func (s *Service) RenewLease(leaseID uint64) (state.RenewLeaseResponse, error) {
+// RenewLease extends a lease by its TTL and returns that TTL. Renewals are
+// tracked in memory on the leader rather than written to the Raft log.
+func (s *Service) RenewLease(leaseID uint64) (time.Duration, error) {
 	if err := s.ensureLeader(); err != nil {
-		return state.RenewLeaseResponse{}, err
+		return 0, err
 	}
 
-	return as[state.RenewLeaseResponse](s.node.ApplyRenewLease(leaseID, s.node.Now()))
+	return s.node.RenewLease(leaseID)
 }
 
 // AcquireLock acquires a named distributed lock bound to the given lease.
@@ -118,7 +117,11 @@ func (s *Service) AcquireLock(lockName, ownerID string, leaseID uint64) (state.A
 		return state.AcquireLockResponse{}, &InvalidArgumentError{Message: "owner_id, lock_name and lease_id are required"}
 	}
 
-	return as[state.AcquireLockResponse](s.node.Apply(raftlog.NewAcquireLockCmd(lockName, ownerID, leaseID, s.node.Now())))
+	if err := s.node.CheckLeaseAlive(leaseID); err != nil {
+		return state.AcquireLockResponse{}, err
+	}
+
+	return as[state.AcquireLockResponse](s.node.Apply(raftlog.NewAcquireLockCmd(lockName, ownerID, leaseID)))
 }
 
 // ReleaseLock releases a held lock. Only the lease that acquired it may release it.

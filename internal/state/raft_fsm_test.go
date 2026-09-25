@@ -31,7 +31,7 @@ func TestRaftFSMRestore(t *testing.T) {
 	createdAt := fixedTestTime(0)
 
 	firstLease := mustCreateLease(t, original.fsm, "client-1", 10*time.Second, createdAt).LeaseID
-	firstLock := mustAcquireLock(t, original.fsm, "alpha", "client-1", firstLease, createdAt.Add(time.Second))
+	firstLock := mustAcquireLock(t, original.fsm, "alpha", "client-1", firstLease)
 	_, err := original.fsm.Apply(raftlog.NewUpsertEndpointCmd("node-1", "127.0.0.1:9000"))
 	require.NoError(t, err)
 
@@ -56,7 +56,7 @@ func TestRaftFSMRestore(t *testing.T) {
 	secondLease := mustCreateLease(t, restored.fsm, "client-2", 10*time.Second, createdAt.Add(2*time.Second))
 	assert.Equal(t, firstLease+1, secondLease.LeaseID)
 
-	secondLock := mustAcquireLock(t, restored.fsm, "beta", "client-2", secondLease.LeaseID, createdAt.Add(3*time.Second))
+	secondLock := mustAcquireLock(t, restored.fsm, "beta", "client-2", secondLease.LeaseID)
 	assert.Equal(t, uint64(2), secondLock.FencingToken)
 	assert.Equal(t, stateStats(2, 2, 2), restored.fsm.Stats())
 }

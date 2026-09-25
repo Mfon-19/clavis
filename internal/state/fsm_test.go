@@ -25,10 +25,10 @@ func mustCreateLease(t testing.TB, fsm *FSM, owner string, ttl time.Duration, cr
 	return resp
 }
 
-func mustAcquireLock(t testing.TB, fsm *FSM, lockName, owner string, leaseID uint64, acquiredAt time.Time) AcquireLockResponse {
+func mustAcquireLock(t testing.TB, fsm *FSM, lockName, owner string, leaseID uint64) AcquireLockResponse {
 	t.Helper()
 
-	result, err := fsm.Apply(raftlog.NewAcquireLockCmd(lockName, owner, leaseID, acquiredAt))
+	result, err := fsm.Apply(raftlog.NewAcquireLockCmd(lockName, owner, leaseID))
 	require.NoError(t, err)
 
 	resp, ok := result.(AcquireLockResponse)
@@ -46,11 +46,11 @@ func TestAcquireLock(t *testing.T) {
 	lease1 := mustCreateLease(t, fsm, "client-1", 10*time.Second, createdAt).LeaseID
 	lease2 := mustCreateLease(t, fsm, "client-2", 10*time.Second, createdAt.Add(time.Second)).LeaseID
 
-	first := mustAcquireLock(t, fsm, "my-lock", "client-1", lease1, createdAt.Add(2*time.Second))
+	first := mustAcquireLock(t, fsm, "my-lock", "client-1", lease1)
 	assert.Equal(t, uint64(1), first.FencingToken)
 	assert.Equal(t, 10*time.Second, first.LeaseTTL)
 
-	second := mustAcquireLock(t, fsm, "my-lock", "client-1", lease1, createdAt.Add(3*time.Second))
+	second := mustAcquireLock(t, fsm, "my-lock", "client-1", lease1)
 	assert.Equal(t, first.FencingToken, second.FencingToken, "same lease should re-acquire idempotently")
 	assert.Equal(t, 10*time.Second, second.LeaseTTL, "same lease should receive the original TTL")
 	assert.Equal(t, stateStats(1, 2, 1), fsm.Stats(), "re-acquire should not advance fencing counter")
@@ -61,58 +61,30 @@ func TestAcquireLock(t *testing.T) {
 	assert.Equal(t, "client-1", lock.OwnerID)
 	assert.Equal(t, uint64(1), lock.FencingToken)
 
-	_, err := fsm.Apply(raftlog.NewAcquireLockCmd("my-lock", "client-2", lease2, createdAt.Add(4*time.Second)))
+	_, err := fsm.Apply(raftlog.NewAcquireLockCmd("my-lock", "client-2", lease2))
 	assert.ErrorIs(t, err, domain.ErrLockAlreadyHeld)
 
-	other := mustAcquireLock(t, fsm, "other-lock", "client-1", lease1, createdAt.Add(5*time.Second))
+	other := mustAcquireLock(t, fsm, "other-lock", "client-1", lease1)
 	assert.Equal(t, uint64(2), other.FencingToken)
 	assert.Equal(t, stateStats(2, 2, 2), fsm.Stats())
 }
 
-// TestDelayedRenewalDoesNotShortenLease verifies that concurrent renewal RPCs
-// may be applied out of timestamp order without moving the deadline backwards.
-func TestDelayedRenewalDoesNotShortenLease(t *testing.T) {
-	fsm := NewFSM()
-	createdAt := fixedTestTime(0)
-	leaseID := mustCreateLease(t, fsm, "client-1", 10*time.Second, createdAt).LeaseID
-
-	result, err := fsm.Apply(raftlog.NewRenewLeaseCmd(leaseID, createdAt.Add(8*time.Second)))
-	require.NoError(t, err)
-	newerExpiry := result.(RenewLeaseResponse).ExpiresAt
-
-	result, err = fsm.Apply(raftlog.NewRenewLeaseCmd(leaseID, createdAt.Add(2*time.Second)))
-	require.NoError(t, err)
-	delayedExpiry := result.(RenewLeaseResponse).ExpiresAt
-
-	assert.Equal(t, newerExpiry, delayedExpiry)
-	assert.Equal(t, createdAt.Add(18*time.Second), delayedExpiry)
-}
-
-// TestLeaseOwnershipAndExpiryChecks verifies that lock operations reject
-// expired leases, missing leases, and callers whose owner ID does not match
-// the lease that authorizes the lock.
+// TestLeaseChecks verifies that acquiring a lock requires an existing lease
+// owned by the caller. Lease liveness is decided by the leader, not the FSM.
 func TestLeaseChecks(t *testing.T) {
 	fsm := NewFSM()
-	createdAt := fixedTestTime(0)
+	leaseID := mustCreateLease(t, fsm, "client-1", 2*time.Second, fixedTestTime(0)).LeaseID
 
-	leaseResp := mustCreateLease(t, fsm, "client-1", 2*time.Second, createdAt)
-
-	_, err := fsm.Apply(raftlog.NewAcquireLockCmd("missing-lease-lock", "client-1", 999, createdAt))
+	_, err := fsm.Apply(raftlog.NewAcquireLockCmd("missing-lease-lock", "client-1", 999))
 	assert.ErrorIs(t, err, domain.ErrLeaseNotFound)
 
-	_, err = fsm.Apply(raftlog.NewAcquireLockCmd("wrong-owner-lock", "client-2", leaseResp.LeaseID, createdAt.Add(time.Second)))
+	_, err = fsm.Apply(raftlog.NewAcquireLockCmd("wrong-owner-lock", "client-2", leaseID))
 	assert.ErrorIs(t, err, domain.ErrNotLockOwner)
-
-	_, err = fsm.Apply(raftlog.NewAcquireLockCmd("expired-lock", "client-1", leaseResp.LeaseID, createdAt.Add(3*time.Second)))
-	assert.ErrorIs(t, err, domain.ErrLeaseExpired)
-
-	_, err = fsm.Apply(raftlog.NewRenewLeaseCmd(leaseResp.LeaseID, createdAt.Add(3*time.Second)))
-	assert.ErrorIs(t, err, domain.ErrLeaseExpired)
 }
 
-// TestReleaseAndExpirySemantics verifies that only the owning lease can release
-// a lock, and that a stale expiry command becomes a no-op if the lease was
-// renewed before the expiry command's timestamp.
+// TestReleaseAndExpiry verifies that only the owning lease can release a lock,
+// that expiring a lease releases its locks, and that renewal entries written
+// by older versions are ignored on replay.
 func TestReleaseAndExpiry(t *testing.T) {
 	fsm := NewFSM()
 	createdAt := fixedTestTime(0)
@@ -120,7 +92,7 @@ func TestReleaseAndExpiry(t *testing.T) {
 	lease1 := mustCreateLease(t, fsm, "client-1", 5*time.Second, createdAt).LeaseID
 	lease2 := mustCreateLease(t, fsm, "client-2", 5*time.Second, createdAt.Add(time.Second)).LeaseID
 
-	lockResp := mustAcquireLock(t, fsm, "my-lock", "client-1", lease1, createdAt.Add(2*time.Second))
+	lockResp := mustAcquireLock(t, fsm, "my-lock", "client-1", lease1)
 	assert.Equal(t, uint64(1), lockResp.FencingToken)
 
 	_, err := fsm.Apply(raftlog.NewReleaseLockCmd("my-lock", lease2))
@@ -130,28 +102,20 @@ func TestReleaseAndExpiry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, stateStats(0, 2, 1), fsm.Stats())
 
-	mustAcquireLock(t, fsm, "my-lock", "client-1", lease1, createdAt.Add(3*time.Second))
+	mustAcquireLock(t, fsm, "my-lock", "client-1", lease1)
 
-	result, err := fsm.Apply(raftlog.NewRenewLeaseCmd(lease1, createdAt.Add(4*time.Second)))
+	legacyRenewal := &raftlog.CommandWrapper{
+		Type:    raftlog.CommandType_COMMAND_TYPE_RENEW_LEASE,
+		Payload: &raftlog.CommandWrapper_RenewLease{RenewLease: &raftlog.RenewLeaseCommand{LeaseId: lease1}},
+	}
+	_, err = fsm.Apply(legacyRenewal)
 	require.NoError(t, err)
-	renewResp := result.(RenewLeaseResponse)
-	assert.Equal(t, createdAt.Add(9*time.Second), renewResp.ExpiresAt)
 
-	result, err = fsm.Apply(raftlog.NewExpireLeaseCmd(lease1, createdAt.Add(5*time.Second)))
+	result, err := fsm.Apply(raftlog.NewExpireLeaseCmd(lease1))
 	require.NoError(t, err)
-	expireResp := result.(ExpireLeaseResponse)
-	assert.Equal(t, 0, expireResp.LocksReleased, "stale expiry must not delete a renewed lease")
+	assert.Equal(t, 1, result.(ExpireLeaseResponse).LocksReleased)
 
-	lock, ok := fsm.GetLock("my-lock")
-	require.True(t, ok)
-	assert.Equal(t, lease1, lock.LeaseID)
-
-	result, err = fsm.Apply(raftlog.NewExpireLeaseCmd(lease1, createdAt.Add(9*time.Second)))
-	require.NoError(t, err)
-	expireResp = result.(ExpireLeaseResponse)
-	assert.Equal(t, 1, expireResp.LocksReleased)
-
-	_, ok = fsm.GetLease(lease1)
+	_, ok := fsm.GetLease(lease1)
 	assert.False(t, ok)
 	_, ok = fsm.GetLock("my-lock")
 	assert.False(t, ok)

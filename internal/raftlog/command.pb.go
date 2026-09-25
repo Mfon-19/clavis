@@ -149,7 +149,8 @@ func (x *CreateLeaseCommand) GetCreateAtUnixNano() int64 {
 	return 0
 }
 
-// RenewLeaseCommand renews an existing lease relative to the proposal time.
+// RenewLeaseCommand is no longer written. Renewals are tracked in memory on the
+// leader; entries written by older versions are ignored on replay.
 type RenewLeaseCommand struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	LeaseId           uint64                 `protobuf:"varint,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
@@ -202,14 +203,15 @@ func (x *RenewLeaseCommand) GetRenewedAtUnixNano() int64 {
 	return 0
 }
 
-// AcquireLockCommand acquires a lock with fencing. The timestamp lets the FSM
-// reject acquisitions whose lease had already expired at proposal time.
+// AcquireLockCommand acquires a lock with fencing. The lease must still exist
+// when the command applies; lease liveness is decided by the leader.
 type AcquireLockCommand struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	LockName           string                 `protobuf:"bytes,1,opt,name=lock_name,json=lockName,proto3" json:"lock_name,omitempty"`
-	OwnerId            string                 `protobuf:"bytes,2,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
-	LeaseId            uint64                 `protobuf:"varint,3,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
-	AcquiredAtUnixNano int64                  `protobuf:"varint,4,opt,name=acquired_at_unix_nano,json=acquiredAtUnixNano,proto3" json:"acquired_at_unix_nano,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	LockName string                 `protobuf:"bytes,1,opt,name=lock_name,json=lockName,proto3" json:"lock_name,omitempty"`
+	OwnerId  string                 `protobuf:"bytes,2,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	LeaseId  uint64                 `protobuf:"varint,3,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	// No longer set or read.
+	AcquiredAtUnixNano int64 `protobuf:"varint,4,opt,name=acquired_at_unix_nano,json=acquiredAtUnixNano,proto3" json:"acquired_at_unix_nano,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -325,12 +327,13 @@ func (x *ReleaseLockCommand) GetLeaseId() uint64 {
 	return 0
 }
 
-// ExpireLeaseCommand expires a lease and releases all its locks. If a renewal
-// committed first, the FSM no-ops this command instead of deleting live state.
+// ExpireLeaseCommand expires a lease and releases all its locks. Only the
+// leader proposes it, after deciding the lease is dead.
 type ExpireLeaseCommand struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	LeaseId           uint64                 `protobuf:"varint,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
-	ExpiredAtUnixNano int64                  `protobuf:"varint,2,opt,name=expired_at_unix_nano,json=expiredAtUnixNano,proto3" json:"expired_at_unix_nano,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	LeaseId uint64                 `protobuf:"varint,1,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	// No longer set or read.
+	ExpiredAtUnixNano int64 `protobuf:"varint,2,opt,name=expired_at_unix_nano,json=expiredAtUnixNano,proto3" json:"expired_at_unix_nano,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }

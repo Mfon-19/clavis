@@ -89,14 +89,14 @@ func (s *Server) Heartbeat(stream pb.LockService_HeartbeatServer) error {
 			return err
 		}
 
-		resp, err := s.service.RenewLease(req.LeaseId)
+		ttl, err := s.service.RenewLease(req.LeaseId)
 		if err != nil {
 			return toGRPCError(err)
 		}
 
 		if err := stream.Send(&pb.HeartbeatResponse{
 			LeaseId:    req.LeaseId,
-			TtlSeconds: int64(resp.TTL / time.Second),
+			TtlSeconds: int64(ttl / time.Second),
 		}); err != nil {
 			return err
 		}

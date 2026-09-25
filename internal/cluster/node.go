@@ -30,8 +30,10 @@ type Node struct {
 	shutdownOnce sync.Once
 	clockStarted time.Time
 
-	pendingRenewalsMu sync.Mutex
-	pendingRenewals   map[uint64]map[int64]int
+	leases leaseTracker
+
+	barrierMu   sync.Mutex
+	barrierTerm uint64 // last term whose earlier entries are known applied
 }
 
 // Config holds the settings for creating a new Raft node
@@ -140,8 +142,6 @@ func NewNode(cfg *Config) (*Node, error) {
 		cfg:          cfg,
 		stopCh:       make(chan struct{}),
 		clockStarted: time.Now(),
-
-		pendingRenewals: make(map[uint64]map[int64]int),
 	}
 
 	go node.leaseExpiryLoop()

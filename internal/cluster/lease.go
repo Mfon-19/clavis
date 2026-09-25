@@ -1,101 +1,181 @@
 package cluster
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
+	"github.com/Mfon-19/clavis/internal/domain"
 	"github.com/Mfon-19/clavis/internal/raftlog"
 )
 
-// recordPendingRenewal tracks in-flight renewal that has been submitted to
-// Raft but not yet committed. This prevents the lease expiry loop from racing
-// ahead and expiring a lease that is about to be renewed
-func (n *Node) recordPendingRenewal(leaseID uint64, proposedAt time.Time) {
-	n.pendingRenewalsMu.Lock()
-	defer n.pendingRenewalsMu.Unlock()
-
-	if _, exists := n.pendingRenewals[leaseID]; !exists {
-		n.pendingRenewals[leaseID] = make(map[int64]int)
-	}
-	n.pendingRenewals[leaseID][proposedAt.UnixNano()]++
+// leaseTracker is the leader's in-memory view of lease liveness.
+//
+// Renewals are not written to the Raft log. The leader records when it last
+// renewed each lease, and only the leader decides a lease is dead, which it
+// then makes durable with an expiry command. A lease's deadline is one TTL
+// after the latest of:
+//
+//   - its creation, from the replicated lease record,
+//   - its last renewal on this leader, and
+//   - the moment this node became leader.
+//
+// The last term is the failover rule. Renewal times die with the old leader,
+// so a new leader treats every lease as renewed when it took over. Any renewal
+// the old leader acknowledged happened before that, because the old leader
+// verified its leadership with a quorum before acknowledging.
+type leaseTracker struct {
+	mu          sync.Mutex
+	term        uint64
+	leaderSince time.Time
+	renewedAt   map[uint64]time.Time
+	expiring    map[uint64]bool
 }
 
-// clearPendingRenewal removes a tracked renewal after it has been committed (or failed).
-// Uses reference counting so duplicate timestamps are handled
-func (n *Node) clearPendingRenewal(leaseID uint64, proposedAt time.Time) {
-	n.pendingRenewalsMu.Lock()
-	defer n.pendingRenewalsMu.Unlock()
-
-	leaseRenewals, exists := n.pendingRenewals[leaseID]
-	if !exists {
+// syncTerm resets the tracker when this node starts a new leadership term.
+// The caller must hold t.mu.
+func (t *leaseTracker) syncTerm(term uint64, now time.Time) {
+	if term == t.term {
 		return
 	}
-
-	timestamp := proposedAt.UnixNano()
-	count := leaseRenewals[timestamp]
-	if count <= 1 {
-		delete(leaseRenewals, timestamp)
-	} else {
-		leaseRenewals[timestamp] = count - 1
-	}
-
-	if len(leaseRenewals) == 0 {
-		delete(n.pendingRenewals, leaseID)
-	}
+	t.term = term
+	t.leaderSince = now
+	t.renewedAt = make(map[uint64]time.Time)
+	t.expiring = make(map[uint64]bool)
 }
 
-// hasPendingRenewalBefore reports whether a renewal proposed before deadline
-// is still in the Raft pipeline. Such a renewal will extend the lease when it
-// commits, so the lease must not be expired until it has.
-func (n *Node) hasPendingRenewalBefore(leaseID uint64, deadline time.Time) bool {
-	n.pendingRenewalsMu.Lock()
-	defer n.pendingRenewalsMu.Unlock()
-
-	for unixNano := range n.pendingRenewals[leaseID] {
-		if unixNano < deadline.UnixNano() {
-			return true
+// deadline returns when lease expires unless renewed again. The caller must
+// hold t.mu.
+func (t *leaseTracker) deadline(lease domain.Lease) time.Time {
+	deadline := lease.ExpiresAt()
+	for _, from := range []time.Time{t.leaderSince, t.renewedAt[lease.LeaseID]} {
+		if candidate := from.Add(lease.TTL); !from.IsZero() && candidate.After(deadline) {
+			deadline = candidate
 		}
 	}
-	return false
+	return deadline
 }
 
-// shouldExpireLease returns true if the lease is expired at now, no timely
-// renewal is still in flight, and this node has been leader for at least one
-// full TTL.
-//
-// The leadership grace period exists because pending renewals are tracked only
-// on the leader that proposed them, and clients need time to find a new leader
-// after failover. Without it, a new leader would immediately expire every lease
-// whose holder was mid-reconnect.
-func (n *Node) shouldExpireLease(leaseID uint64, now, leaderSince time.Time) bool {
+// renew records a renewal at now, or reports that the lease is already dead.
+// Checking and recording under one lock is what keeps a renewal from racing
+// the expiry loop: once a lease is claimed for expiry, it cannot be renewed.
+func (t *leaseTracker) renew(term uint64, now time.Time, lease domain.Lease) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.syncTerm(term, now)
+	if t.expiring[lease.LeaseID] || !now.Before(t.deadline(lease)) {
+		return domain.ErrLeaseExpired
+	}
+	t.renewedAt[lease.LeaseID] = now
+	return nil
+}
+
+// claimExpired returns the leases past their deadline at now and marks them
+// as expiring, so later renewals are rejected.
+func (t *leaseTracker) claimExpired(term uint64, now time.Time, leases []domain.Lease) []uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.syncTerm(term, now)
+	var expired []uint64
+	for _, lease := range leases {
+		if !t.expiring[lease.LeaseID] && !now.Before(t.deadline(lease)) {
+			t.expiring[lease.LeaseID] = true
+			expired = append(expired, lease.LeaseID)
+		}
+	}
+	return expired
+}
+
+// alive reports whether a lease is still within its deadline and not being
+// expired.
+func (t *leaseTracker) alive(term uint64, now time.Time, lease domain.Lease) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.syncTerm(term, now)
+	return !t.expiring[lease.LeaseID] && now.Before(t.deadline(lease))
+}
+
+// finishExpiry forgets a lease once its expiry committed. If the expiry
+// failed, the lease is unclaimed so the next pass can retry it.
+func (t *leaseTracker) finishExpiry(leaseID uint64, committed bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	delete(t.expiring, leaseID)
+	if committed {
+		delete(t.renewedAt, leaseID)
+	}
+}
+
+// RenewLease extends a lease by its TTL without writing to the Raft log. It
+// returns the lease's TTL once the renewal is safe to acknowledge.
+func (n *Node) RenewLease(leaseID uint64) (time.Duration, error) {
+	term := n.raft.CurrentTerm()
+
+	// A new leader may still have an expiry from the previous term in its log,
+	// committed or not. Wait until every earlier entry has been applied, so
+	// the lease lookup below cannot acknowledge a lease that is about to be
+	// deleted.
+	if err := n.awaitTermApplied(term); err != nil {
+		return 0, err
+	}
+
 	lease, exists := n.fsm.GetLease(leaseID)
-	if !exists || !lease.IsExpired(now) {
-		return false
+	if !exists {
+		return 0, domain.ErrLeaseNotFound
 	}
-	if now.Before(leaderSince.Add(lease.TTL)) {
-		return false
+	if err := n.leases.renew(term, n.Now(), *lease); err != nil {
+		return 0, err
 	}
-	return !n.hasPendingRenewalBefore(leaseID, lease.ExpiresAt())
+
+	// Only acknowledge once a quorum confirms this node is still leader. That
+	// orders the renewal before any future leader's term, whose grace period
+	// then covers it. This is a network round trip, not a disk write.
+	if err := n.raft.VerifyLeader().Error(); err != nil {
+		return 0, fmt.Errorf("verify leadership: %w", err)
+	}
+	return lease.TTL, nil
 }
 
-// ApplyRenewLease renews a lease through Raft consensus while tracking the
-// renewal as pending to prevent the expiry loop from racing ahead
-func (n *Node) ApplyRenewLease(leaseID uint64, proposedAt time.Time) (any, error) {
-	proposedAt = proposedAt.UTC()
-	n.recordPendingRenewal(leaseID, proposedAt)
-	defer n.clearPendingRenewal(leaseID, proposedAt)
-
-	return n.Apply(raftlog.NewRenewLeaseCmd(leaseID, proposedAt))
+// CheckLeaseAlive rejects a lease that exists in replicated state but that the
+// leader already considers dead. It is a courtesy check before acquiring a
+// lock: if the lease expires right after, the expiry releases the lock too.
+func (n *Node) CheckLeaseAlive(leaseID uint64) error {
+	lease, exists := n.fsm.GetLease(leaseID)
+	if !exists {
+		return domain.ErrLeaseNotFound
+	}
+	if !n.leases.alive(n.raft.CurrentTerm(), n.Now(), *lease) {
+		return domain.ErrLeaseExpired
+	}
+	return nil
 }
 
+// awaitTermApplied blocks until the FSM has applied every entry from before
+// the given leadership term. It issues one Raft barrier per term.
+func (n *Node) awaitTermApplied(term uint64) error {
+	n.barrierMu.Lock()
+	defer n.barrierMu.Unlock()
+
+	if n.barrierTerm == term {
+		return nil
+	}
+	if err := n.raft.Barrier(5 * time.Second).Error(); err != nil {
+		return fmt.Errorf("apply earlier entries: %w", err)
+	}
+	n.barrierTerm = term
+	return nil
+}
+
+// leaseExpiryLoop runs on every node but acts only on the leader. Every tick
+// it expires the leases whose deadline has passed, through Raft so every node
+// deletes the lease and releases its locks at the same log position.
 func (n *Node) leaseExpiryLoop() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-
-	// leaderTerm and leaderSince identify the current leadership stint. Polling
-	// IsLeader alone would miss a lose-and-regain between ticks; the Raft term
-	// always changes across such a transition.
-	var leaderTerm uint64
-	var leaderSince time.Time
 
 	for {
 		select {
@@ -103,23 +183,13 @@ func (n *Node) leaseExpiryLoop() {
 			return
 		case <-ticker.C:
 			if !n.IsLeader() {
-				leaderTerm = 0
 				continue
 			}
 
-			now := n.Now()
-			if term := n.raft.CurrentTerm(); term != leaderTerm {
-				leaderTerm = term
-				leaderSince = now
-			}
-
-			for _, leaseID := range n.fsm.GetExpiredLeases(now) {
-				if !n.shouldExpireLease(leaseID, now, leaderSince) {
-					continue
-				}
-				// Expiry still goes through Raft. Followers must see the same
-				// lease deletion and lock release in the same log order
-				_, _ = n.Apply(raftlog.NewExpireLeaseCmd(leaseID, now))
+			term := n.raft.CurrentTerm()
+			for _, leaseID := range n.leases.claimExpired(term, n.Now(), n.fsm.Leases()) {
+				_, err := n.Apply(raftlog.NewExpireLeaseCmd(leaseID))
+				n.leases.finishExpiry(leaseID, err == nil)
 			}
 		}
 	}
